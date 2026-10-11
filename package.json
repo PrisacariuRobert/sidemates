@@ -87,7 +87,7 @@
     "web-push": "^3.6.7",
     "ws": "^8.21.3",
     "yaml": "2.9.0",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
