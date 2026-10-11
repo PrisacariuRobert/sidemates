@@ -601,6 +601,9 @@ app.post("/api/queue/scan", async (_request, response) => {
   const routine = findMorningBrief(db);
   const bot = (routine ? db.getBot(routine.botId) : null) ?? db.listBots().find((item) => !item.retiredAt);
   if (!bot || bot.retiredAt) return response.status(409).json({ error: "Create a teammate first." });
+  // Apple's built-in AI has no tools, so it can't read Mail: say so instead of starting a look that can't work.
+  const scanAi = rankAi(connectionsFrom(latestProviderStatus()), "heavy", aiRest.isResting)[0];
+  if (scanAi?.model === "apple/on-device" || (bot.aiMode !== "automatic" && db.providerForBot(bot.id)?.runtime === "apple_fm")) return response.status(409).json({ error: "Your team is using Apple's built-in AI, which can't read Mail. Connect ChatGPT, Claude or Gemini (Workspace → Your AI) for the first look.", code: "needs_stronger_ai" });
   const sent = await channelLocalApi("POST", "/api/messages", { threadId: bot.threadId, body: queueScanPrompt(), requestId: `scan-${randomUUID()}`, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
   if (sent.status >= 400) return response.status(sent.status).json({ error: typeof sent.body.error === "string" ? sent.body.error : "The look-through couldn't start." });
   response.json({ started: true, teammate: bot.name, threadId: bot.threadId });

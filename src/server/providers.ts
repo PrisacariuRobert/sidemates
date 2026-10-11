@@ -5,6 +5,7 @@ import type { ProviderCatalogEntry, ProviderInstance, ProviderLoginAttempt, Prov
 import { OpenBotDatabase } from "./database.js";
 import { safeHostEnvironment } from "./runtime.js";
 import { chatgptPlanSignedIn, CHATGPT_PLAN_ID } from "./chatgpt-plan.js";
+import { APPLE_MODEL, appleAiStatus } from "./apple-ai.js";
 import { configuredModels, legacyApiProviderId, isBlockedFreeTierModel, isLocalModelUrl, mayTrainOnPrompts } from "../shared/provider-config.js";
 
 /** Shown when an OpenCode sign-in lists no models. OpenCode's own free models
@@ -105,10 +106,11 @@ export function preferredModel(provider: ProviderInstance["provider"], models: s
 export function modelsFor(provider: ProviderInstance["provider"], allModels: string[]): string[] {
   const prefixes: Record<ProviderInstance["provider"], string[]> = {
     opencode: ["opencode/", "opencode-go/"], claude: ["claude-code/"], openai: ["openai/"],
-    "github-copilot": ["github-copilot/"], gitlab: ["gitlab/"], xai: ["xai/"], google: ["google/"], custom: [],
+    "github-copilot": ["github-copilot/"], gitlab: ["gitlab/"], xai: ["xai/"], google: ["google/"], apple: [], custom: [],
   };
   const selected = agentModels(allModels.filter((model) => prefixes[provider].some((prefix) => model.startsWith(prefix))));
   if (provider === "claude") return ["claude-code/sonnet", "claude-code/opus", "claude-code/haiku"];
+  if (provider === "apple") return [APPLE_MODEL];
   return selected;
 }
 
@@ -155,7 +157,7 @@ export function createProviderStatusReader(inspect: (db: OpenBotDatabase, attemp
 }
 
 async function inspectProviderStatus(db: OpenBotDatabase, loginAttempts: ProviderLoginAttempt[] = []): Promise<ProviderStatus> {
-  const [openCodeVersion, claudeVersion] = await Promise.all([check("opencode", ["--version"]), check("claude", ["--version"])]);
+  const [openCodeVersion, claudeVersion, apple] = await Promise.all([check("opencode", ["--version"]), check("claude", ["--version"]), appleAiStatus()]);
   const openCodeInstalled = openCodeVersion.code === 0;
   const claudeInstalled = claudeVersion.code === 0;
   const [auth, models, claudeAuth] = await Promise.all([
@@ -180,6 +182,7 @@ async function inspectProviderStatus(db: OpenBotDatabase, loginAttempts: Provide
   if (googleConnected) connectedInstance(db, { id: "local-google", name: "Google Gemini", provider: "google", authMode: "cli", runtime: "opencode" });
   if (xaiConnected) connectedInstance(db, { id: "local-xai", name: "SuperGrok / xAI", provider: "xai", authMode: "subscription", runtime: "opencode" });
   if (claudeConnected) connectedInstance(db, { id: "local-claude", name: "Claude", provider: "claude", authMode: "subscription", runtime: "claude_code" });
+  if (apple.available) connectedInstance(db, { id: "local-apple", name: "Apple Intelligence", provider: "apple", authMode: "subscription", runtime: "apple_fm" });
 
   const apiInstances = db.listProviders().filter((instance) => instance.authMode === "api_key" && instance.hasSecret);
   const apiModels = new Map<string, string[]>();
@@ -204,6 +207,7 @@ async function inspectProviderStatus(db: OpenBotDatabase, loginAttempts: Provide
     { id: "gitlab", name: "GitLab Duo", shortName: "GitLab", description: "Connect a GitLab Duo seat for agent work.", badge: "Experimental", connected: gitlabConnected, installed: openCodeInstalled, canConnect: openCodeInstalled, connectionId: gitlabConnected ? "local-gitlab" : null, models: modelsFor("gitlab", allModels), note: gitlabConnected ? "Sign-in found through OpenCode; model access is checked when a task runs." : "GitLab support in OpenCode is experimental." },
     { id: "xai", name: "SuperGrok / xAI", shortName: "Grok", description: "Use SuperGrok device login or an xAI API connection.", badge: "Subscription", connected: xaiConnected, installed: openCodeInstalled, canConnect: openCodeInstalled, connectionId: xaiConnected ? "local-xai" : null, models: modelsFor("xai", allModels), note: xaiConnected ? "Sign-in found through OpenCode; model access is checked when a task runs." : "Secure device sign-in through OpenCode." },
     { id: "google", name: "Google Gemini", shortName: "Gemini", description: "A free Gemini API key from Google AI Studio — a Google account is enough, no card. Free-tier limits apply.", badge: "Free key", connected: googleConnected, installed: openCodeInstalled, canConnect: false, connectionId: googleConnected ? "local-google" : null, models: modelsFor("google", allModels).filter((model) => !/(?:deep-research|computer-use|tts|embedding|image|live|veo|lyria|omni|gemini-2\.)/.test(model)), note: googleConnected ? "Key saved in OpenCode on this Mac; free-tier limits apply." : "Paste a free key from aistudio.google.com." },
+    ...(apple.installed ? [{ id: "apple" as const, name: "Apple Intelligence", shortName: "Apple", description: "Apple's built-in AI on this Mac: free and private, nothing leaves your Mac. It can talk and draft, but can't use mail, files or the web here, so it's used only when nothing else is available.", badge: "Built in", connected: apple.available, installed: true, canConnect: false, connectionId: apple.available ? "local-apple" : null, models: apple.available ? [APPLE_MODEL] : [], note: apple.available ? "Built into this Mac. Free and private, for small jobs." : apple.reason }] : []),
   ];
   const connectionMap = new Map(catalog.map((entry) => [entry.connectionId, entry]));
   const instances = db.listProviders().map((instance) => {

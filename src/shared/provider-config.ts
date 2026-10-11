@@ -85,11 +85,12 @@ export const providerInput = z
         "gitlab",
         "xai",
         "google",
+        "apple",
         "custom",
       ])
       .optional(),
     authMode: z.enum(["cli", "subscription", "api_key"]),
-    runtime: z.enum(["opencode", "claude_code"]).optional(),
+    runtime: z.enum(["opencode", "claude_code", "apple_fm"]).optional(),
     envName: z.string().nullable().optional(),
     secret: z.string().trim().max(10_000).nullable().optional(),
     apiConfig: apiConnectionSchema.nullable().optional(),
@@ -138,6 +139,8 @@ export function modelBelongsToConnection(
   if (instance.apiConfig) return configuredModels(instance).includes(model);
   if (instance.runtime === "claude_code")
     return /^claude-code\/[a-z0-9][a-z0-9._:\[\]-]{0,199}$/i.test(model);
+  // Apple's built-in AI has one model, on this Mac.
+  if (instance.runtime === "apple_fm") return model === "apple/on-device";
   if (instance.authMode === "api_key") {
     const prefix = legacyApiProviderId(instance.envName);
     return Boolean(prefix && model.startsWith(`${prefix}/`));
@@ -150,6 +153,7 @@ export function modelBelongsToConnection(
     gitlab: ["gitlab/"],
     xai: ["xai/"],
     google: ["google/"],
+    apple: ["apple/"],
     custom: [],
   };
   return prefixes[instance.provider].some((prefix) => model.startsWith(prefix));
@@ -217,6 +221,7 @@ const MODEL_WORDS: Record<string, string> = { gpt: "GPT", glm: "GLM", ai: "AI", 
 
 /** "opencode-go/gpt-5.6-luna" → "GPT 5.6 Luna". */
 export function friendlyModelName(model: string): string {
+  if (model === "apple/on-device") return "Apple Intelligence";
   const tail = model.split("/").at(-1) || model;
   // The tier is shown separately, so "space-bunny-free" reads "Space Bunny".
   return tail.split(/[-_]/).filter(Boolean).filter((word, index, words) => !(index === words.length - 1 && index > 0 && word.toLowerCase() === "free")).map((word) => {

@@ -23,6 +23,9 @@ coverage/
 xcuserdata/
 DerivedData/
 
+# Apple built-in AI bridge, built by npm run build on a Mac
+/bin/apple-ai
+
 # Desktop shell build input and output
 desktop/runtime/
 desktop/release/

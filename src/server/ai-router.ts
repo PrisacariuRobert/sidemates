@@ -62,9 +62,11 @@ export function bestModelFor(connection: AiConnection, job: AiJob): string | und
 /** Strongest first for big jobs; for small ones, the plans that cost the
  * least of the owner's strong allowance come first. A local or custom
  * connection is a last resort for heavy work and fine for light work. */
+// Apple's built-in AI is always last: free and private, but without tools,
+// so it only takes a job when nothing else can.
 const ORDER: Record<AiJob, string[]> = {
-  heavy: ["claude", "openai", "github-copilot", "xai", "opencode", "google", "gitlab", "custom"],
-  light: ["claude", "openai", "opencode", "google", "github-copilot", "xai", "custom", "gitlab"],
+  heavy: ["claude", "openai", "github-copilot", "xai", "opencode", "google", "gitlab", "custom", "apple"],
+  light: ["claude", "openai", "opencode", "google", "github-copilot", "xai", "custom", "gitlab", "apple"],
 };
 
 export function rankAi(connections: AiConnection[], job: AiJob, isResting: (id: string) => boolean = () => false): AiPick[] {

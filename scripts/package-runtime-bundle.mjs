@@ -116,6 +116,9 @@ try {
     if (!extracted) throw new Error("The opencode archive did not contain an opencode binary.");
     copyFileSync(extracted, path.join(bin, "opencode"));
     chmodSync(path.join(bin, "opencode"), 0o755);
+    // Apple's built-in AI bridge, when this Mac could build it (npm run build).
+    const appleAi = path.join(root, "bin", "apple-ai");
+    if (platform.startsWith("darwin") && existsSync(appleAi)) { copyFileSync(appleAi, path.join(bin, "apple-ai")); chmodSync(path.join(bin, "apple-ai"), 0o755); }
   }
   // App tree. Dependencies install per platform on the building host.
   for (const relative of ["dist", "src", "skills", "LICENSE", "THIRD_PARTY_NOTICES.md", "package.json", "package-lock.json", "scripts/background-runner.mjs"]) {

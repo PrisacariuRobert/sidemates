@@ -10,6 +10,7 @@ import { OpenBotDatabase } from "./database.js";
 import { safeHostEnvironment } from "./runtime.js";
 import { connectedAppsText, prepareWorkspace, teammateSystemPrompt } from "./workspace.js";
 import { TOOL_STEP_LABELS } from "../shared/step-labels.js";
+import { appleInstructions, applePrompt, respondOnApple } from "./apple-ai.js";
 import { browserTaskDirection } from "./browser-access.js";
 import { conversationStyle } from "./conversation-style.js";
 import { modelAttachmentFiles, type AttachmentService } from "./attachments.js";
@@ -153,6 +154,8 @@ export interface OpenCodeRunnerOptions {
   spawnProcess?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   /** The owner's connected AIs, for teammates set to automatic. */
   aiConnections?: () => AiConnection[];
+  /** Apple's built-in AI; replaceable in tests. */
+  appleRespond?: (input: { instructions: string; prompt: string }) => Promise<string>;
 }
 
 export class OpenCodeRunner {
@@ -336,6 +339,30 @@ export class OpenCodeRunner {
     this.resumeCoordinatorIfReady(parent.id);
   }
 
+  /** Apple's built-in AI: one answer from this Mac, no tools, no tokens
+   * spent. If it can't answer, the job stops with a plain reason. */
+  private async runOnApple(run: Run, bot: Bot) {
+    const db = this.options.db, startedAt = new Date().toISOString();
+    const task = db.startRunTask(run.id);
+    db.updateRun(run.id, { status: "running", ...(run.startedAt ? {} : { startedAt }), progressAt: startedAt, partialText: "", taskStage: task?.stage || "planning" });
+    db.addActivity({ runId: run.id, botId: bot.id, kind: "status", label: "Woke up", detail: "Using Apple Intelligence on this Mac" });
+    this.options.onChange();
+    let text: string;
+    try {
+      const history = db.listMessages(run.threadId, 20).filter((message) => message.id !== run.triggerMessageId);
+      text = await (this.options.appleRespond || respondOnApple)({ instructions: appleInstructions(bot), prompt: applePrompt(history, run.prompt) });
+    } catch (error) {
+      this.failBeforeStart(run, error instanceof Error ? error.message : "Apple's built-in AI couldn't answer this.", "Apple's built-in AI couldn't answer");
+      return;
+    }
+    db.updateRun(run.id, { status: "completed", finishedAt: new Date().toISOString(), summary: text, partialText: null, error: null });
+    db.finishRunTask(run.id, "completed");
+    db.addActivity({ runId: run.id, botId: bot.id, kind: "status", label: "Finished", detail: null });
+    if (!shouldPublishRunMessage(run)) this.shareChildOutcome(run, bot, text);
+    else db.addMessage({ threadId: run.threadId, senderType: "bot", senderId: bot.id, body: text, runId: run.id, replyToId: run.triggerMessageId || undefined });
+    this.options.onChange();
+  }
+
   private failBeforeStart(run: Run, error: string, label = "Couldn’t start") {
     this.options.db.updateRun(run.id, { status: "failed", finishedAt: new Date().toISOString(), error });
     this.options.db.finishRunTask(run.id, "failed", error);
@@ -510,6 +537,7 @@ export class OpenCodeRunner {
     const initialStop = meter.reason(previousTokens, !this.options.db.budgetAvailable(bot.id).allowed);
     if (initialStop === "tokens") { this.pauseForTokens(run.id); return; }
     if (initialStop) { this.failBeforeStart(run, executionStopMessage[initialStop]); return; }
+    if (provider.runtime === "apple_fm") { void this.runOnApple(run, bot); return; }
     const workspace = prepareWorkspace(this.options.db, bot, Boolean(run.expectedWorkKind));
     const sharedFiles = prepareConsultationFiles(this.options.db, run);
     const useClaude = provider?.runtime === "claude_code";

@@ -62,3 +62,12 @@ test("ChatGPT through Sign in with ChatGPT gets its strong model for big jobs an
   assert.equal(bestModelFor(plan, "heavy"), "openbot-chatgpt-plan/gpt-6.1-sol");
   assert.equal(bestModelFor(plan, "light"), "openbot-chatgpt-plan/gpt-5.6-mini");
 });
+
+test("Apple's built-in AI only takes a job when nothing else can", () => {
+  const apple: AiConnection = { id: "local-apple", provider: "apple", connected: true, models: ["apple/on-device"] };
+  const custom: AiConnection = { id: "local-model", provider: "custom", connected: true, models: ["openbot-local-model/qwen"] };
+  assert.deepEqual(rankAi([apple, claude], "light").map((pick) => pick.instanceId), ["local-claude", "local-apple"]);
+  assert.deepEqual(rankAi([apple, custom], "heavy").map((pick) => pick.instanceId), ["local-model", "local-apple"]);
+  assert.deepEqual(rankAi([apple], "heavy"), [{ instanceId: "local-apple", model: "apple/on-device" }], "With no other AI, the team still works");
+  assert.deepEqual(rankAi([apple, claude], "light", (id) => id === "local-claude")[0], { instanceId: "local-apple", model: "apple/on-device" }, "And when the others have run out");
+});

@@ -10,7 +10,7 @@
     "remote": "npm run build && OPENBOT_HOST=0.0.0.0 NODE_ENV=production tsx src/server/index.ts",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/build-apple-ai.mjs",
     "start": "NODE_ENV=production tsx src/server/index.ts",
     "desktop": "npm --prefix desktop start",
     "mcp": "node --import tsx mcp/openbot.ts",

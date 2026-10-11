@@ -81,6 +81,15 @@ export function BringYourAI({ onConnected, compact = false }: { onConnected: (co
 
       <h4>Start free</h4>
       <ul className="byo-list">
+        {entry("apple") && <li className="byo-row">
+          <div className="byo-row-text">
+            <strong>Apple Intelligence<span className="byo-free">Built in</span></strong>
+            <small>Already on this Mac: free and private, nothing leaves your Mac. Good for talking things through and drafting; it can't read mail, files or the web here, so connect another AI for that.</small>
+          </div>
+          {entry("apple")?.connected
+            ? <span className="byo-connected"><Check size={14} aria-hidden="true" /> Ready</span>
+            : <span className="byo-unavailable">{entry("apple")?.note || "Not available on this Mac"}</span>}
+        </li>}
         <li className="byo-row byo-key-row">
           <div className="byo-row-text">
             <strong>Google Gemini{!entry("google")?.connected && <span className="byo-free">Free key</span>}</strong>
