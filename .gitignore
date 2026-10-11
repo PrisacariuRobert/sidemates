@@ -52,3 +52,6 @@ dist-release/
 # Generated demo clips (scripts/record-demo.mjs)
 # Marketing plans, drafts and reports are private to the maintainer: never commit them.
 /marketing/
+
+# Python bytecode (Blender scripts)
+__pycache__/
