@@ -91,16 +91,16 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.6.4",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "@types/web-push": "^3.6.4",
     "@types/ws": "^8.18.1",
-    "@vitejs/plugin-react": "^6.1.1",
-    "concurrently": "^10.0.5",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
     "typescript": "^7.0.2",
-    "vite": "^8.2.2"
+    "vite": "^8.3.4"
   },
   "overrides": {
     "shell-quote": "^1.12.0"
