@@ -41,6 +41,8 @@ export const videoRenderInput = z.object({
     caption: z.string().trim().min(1).max(160).optional(),
     highlight: z.string().trim().max(60).optional(),
     zoom: z.boolean().default(true),
+    /** Fill the frame by cropping the sides. Off by default: a clip that does not match the frame is shown whole over a blurred copy of itself, so on-screen text is never cut. */
+    crop: z.boolean().default(false),
   }).strict()).min(1).max(MAX_SCENES),
   voiceover: relativePath.optional(),
   music: relativePath.optional(),
@@ -103,7 +105,7 @@ export async function captionPng(text: string, highlight: string | undefined, wi
   const marked = new Set((highlight || "").toLowerCase().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}]/gu, "")).filter(Boolean));
   const lineHeight = Math.round(size * 1.18);
   const block = lineHeight * lines.length;
-  const bottom = centered ? (height + block) / 2 - (lineHeight - size) : height * (width > height ? 0.9 : 0.8);
+  const bottom = centered ? (height + block) / 2 - (lineHeight - size) : height * (width > height ? 0.9 : 0.84);
   const firstBaseline = bottom - block + lineHeight - (lineHeight - size) / 2;
   const font = `font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="800" font-size="${size}" text-anchor="middle" stroke="#000" stroke-width="${Math.round(size * 0.11)}" stroke-linejoin="round" paint-order="stroke"`;
   const rows = lines.map((line, index) => {
@@ -127,7 +129,30 @@ const runTool: Run = (file, args) => new Promise((resolve, reject) => {
   });
 });
 
-export function sceneArgs(input: { width: number; height: number; background: string; scene: VideoRenderInput["scenes"][number]; source?: string; caption?: string; out: string; kbps?: number }): string[] {
+export type Size = { w: number; h: number };
+/** Width and height of a clip or picture, or null when ffprobe is missing. */
+export async function probeSize(file: string): Promise<Size | null> {
+  const ffprobe = findTool("ffprobe");
+  if (!ffprobe) return null;
+  return new Promise((resolve) => {
+    execFile(ffprobe, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", file], { timeout: 30_000 }, (error, stdout) => {
+      const match = !error && /^(\d{2,5})x(\d{2,5})/.exec(String(stdout).trim());
+      resolve(match ? { w: Number(match[1]), h: Number(match[2]) } : null);
+    });
+  });
+}
+/** The size a source takes when shown whole inside the frame, or null when it
+ * already matches the frame closely enough to fill it. */
+export function fitBox(source: Size | null, width: number, height: number): Size | null {
+  if (!source) return null;
+  const ratio = (source.w / source.h) / (width / height);
+  if (Math.abs(ratio - 1) <= 0.05) return null;
+  const scale = Math.min(width / source.w, height / source.h);
+  const even = (value: number) => Math.max(2, Math.round(value / 2) * 2);
+  return { w: even(source.w * scale), h: even(source.h * scale) };
+}
+
+export function sceneArgs(input: { width: number; height: number; background: string; scene: VideoRenderInput["scenes"][number]; source?: string; caption?: string; out: string; kbps?: number; fit?: Size | null }): string[] {
   const { width: w, height: h, scene, source, caption, out } = input;
   const kbps = input.kbps ?? 4000;
   const d = scene.duration;
@@ -137,8 +162,20 @@ export function sceneArgs(input: { width: number; height: number; background: st
   else args.push("-f", "lavfi", "-i", `color=c=0x${input.background.slice(1)}:s=${w}x${h}:r=30:d=${d}`);
   // Looped for the whole scene so the fade-in has frames to fade across.
   if (caption) args.push("-loop", "1", "-framerate", "30", "-t", String(d), "-i", caption);
-  const zoom = scene.zoom && source ? `,scale=w='${w}*(1+0.06*t/${d})':h='${h}*(1+0.06*t/${d})':eval=frame,crop=${w}:${h}` : "";
-  const base = `[0:v]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=30${zoom},format=yuv420p`;
+  const fit = source ? input.fit : null;
+  let base: string;
+  if (fit) {
+    // The whole picture, centred over a darkened, blurred copy that fills the
+    // frame. The slow zoom grows the picture from 94% to 100% of its box.
+    const scaleAt = `(0.94+0.06*t/${d})`;
+    const front = scene.zoom
+      ? `scale=w='trunc(${fit.w}*${scaleAt}/2)*2':h='trunc(${fit.h}*${scaleAt}/2)*2':eval=frame`
+      : `scale=${fit.w}:${fit.h}`;
+    base = `[0:v]setsar=1,fps=30,split=2[a][b];[a]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},gblur=sigma=40,eq=brightness=-0.12[blur];[b]${front}[front];[blur][front]overlay=x='(W-w)/2':y='(H-h)/2':eval=frame:format=auto,format=yuv420p`;
+  } else {
+    const zoom = scene.zoom && source ? `,scale=w='${w}*(1+0.06*t/${d})':h='${h}*(1+0.06*t/${d})':eval=frame,crop=${w}:${h}` : "";
+    base = `[0:v]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=30${zoom},format=yuv420p`;
+  }
   const graph = caption
     ? `${base}[bg];[1:v]format=rgba,fade=t=in:st=0:d=0.25:alpha=1[cap];[bg][cap]overlay=0:0:format=auto,format=yuv420p[v]`
     : `${base}[v]`;
@@ -173,7 +210,8 @@ export async function renderVideo(workspace: string, args: unknown, run: Run = r
         writeFileSync(caption, await captionPng(scene.caption, scene.highlight, width, height, input.accent, !sources[index]));
       }
       const out = path.join(temp, `scene-${index}.mp4`);
-      await run(ffmpeg, sceneArgs({ width, height, background: input.background, scene, source: sources[index], caption, out, kbps: videoKbps(total) }));
+      const fit = sources[index] && !scene.crop ? fitBox(await probeSize(sources[index]!), width, height) : null;
+      await run(ffmpeg, sceneArgs({ width, height, background: input.background, scene, source: sources[index], caption, out, kbps: videoKbps(total), fit }));
       segments.push(out);
     }
     const list = path.join(temp, "scenes.txt");

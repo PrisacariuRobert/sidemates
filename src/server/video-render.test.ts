@@ -5,10 +5,10 @@ import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { captionPng, findTool, renderVideo, sceneArgs, videoKbps, videoRenderInput } from "./video-render.js";
+import { captionPng, findTool, fitBox, renderVideo, sceneArgs, videoKbps, videoRenderInput } from "./video-render.js";
 
 const workspace = () => { const dir = mkdtempSync(path.join(tmpdir(), "video-ws-")); return dir; };
-const scene = { duration: 2, start: 0, zoom: true };
+const scene = { duration: 2, start: 0, zoom: true, crop: false };
 const noRun = async () => { throw new Error("ffmpeg must not run for an invalid request"); };
 
 test("a render request is bounded and only creates a new .mp4", () => {
@@ -98,4 +98,39 @@ test("the bitrate is capped so a normal short fits the 25 MB chat limit", () => 
   for (const seconds of [15, 45, 59, 90]) assert.ok(size(seconds) < 24, `${seconds}s is about ${size(seconds).toFixed(1)} MB`);
   assert.equal(videoKbps(5), 6000);
   assert.equal(videoKbps(180), 1200);
+});
+
+test("a clip that does not match the frame is shown whole, not cropped", () => {
+  assert.deepEqual(fitBox({ w: 1920, h: 1080 }, 1080, 1920), { w: 1080, h: 608 });
+  assert.deepEqual(fitBox({ w: 1080, h: 1920 }, 1920, 1080), { w: 608, h: 1080 });
+  assert.equal(fitBox({ w: 1080, h: 1920 }, 1080, 1920), null, "a matching clip fills the frame");
+  assert.equal(fitBox({ w: 1100, h: 1920 }, 1080, 1920), null, "close enough fills the frame");
+  assert.equal(fitBox(null, 1080, 1920), null, "unknown size falls back to filling");
+  const args = sceneArgs({ width: 1080, height: 1920, background: "#14141c", scene: { ...scene, source: undefined }, source: "/w/a.mp4", out: "/tmp/o.mp4", fit: { w: 1080, h: 608 } });
+  const graph = args[args.indexOf("-filter_complex") + 1]!;
+  assert.ok(graph.includes("gblur") && graph.includes("overlay=x='(W-w)/2'"), graph);
+  assert.ok(graph.includes("0.94+0.06*t/2"), "the picture grows from 94% to 100% of its box");
+  const filled = sceneArgs({ width: 1080, height: 1920, background: "#14141c", scene, source: "/w/a.mp4", out: "/tmp/o.mp4", fit: null });
+  assert.ok(!filled[filled.indexOf("-filter_complex") + 1]!.includes("gblur"));
+});
+
+test("wide footage keeps its left and right edges in a vertical video", { skip: !findTool("ffmpeg") || !findTool("ffprobe"), timeout: 120_000 }, async () => {
+  const dir = workspace();
+  const ffmpeg = findTool("ffmpeg")!;
+  // Red bars on the far left and right edges of a wide clip: cropping would lose them.
+  execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=0x303030:s=1920x1080:r=30:d=3", "-vf", "drawbox=x=0:y=0:w=160:h=1080:color=red:t=fill,drawbox=x=1760:y=0:w=160:h=1080:color=lime:t=fill", "-c:v", "libx264", "-pix_fmt", "yuv420p", path.join(dir, "wide.mp4")]);
+  const frameOf = async (name: string, request: object) => {
+    await renderVideo(dir, { filename: name, ...request });
+    const png = path.join(dir, `${name}.png`);
+    execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-ss", "0.2", "-i", path.join(dir, name), "-frames:v", "1", png]);
+    return sharp(png).raw().toBuffer({ resolveWithObject: true });
+  };
+  const at = (frame: { data: Buffer; info: { width: number; channels: number } }, x: number, y: number) => { const i = (y * frame.info.width + x) * frame.info.channels; return [frame.data[i]!, frame.data[i + 1]!, frame.data[i + 2]!]; };
+  const fitted = await frameOf("fit.mp4", { scenes: [{ source: "wide.mp4", duration: 1, zoom: false }] });
+  const left = at(fitted, 10, 960), right = at(fitted, 1069, 960);
+  assert.ok(left[0]! > 180 && left[1]! < 80, `left edge kept (red): ${left}`);
+  assert.ok(right[1]! > 180 && right[0]! < 80, `right edge kept (green): ${right}`);
+  const cropped = await frameOf("crop.mp4", { scenes: [{ source: "wide.mp4", duration: 1, zoom: false, crop: true }] });
+  const lost = at(cropped, 10, 960);
+  assert.ok(!(lost[0]! > 180 && lost[1]! < 80), `crop: true loses the edge: ${lost}`);
 });
