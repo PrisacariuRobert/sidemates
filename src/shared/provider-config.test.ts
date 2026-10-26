@@ -181,6 +181,11 @@ test("model choices lead with a recommendation and never offer OpenCode's app-on
   assert.equal(friendlyModelName("opencode-go/glm-5.3-flash"), "GLM 5.3 Flash");
   assert.equal(friendlyModelName("opencode-go/deepseek-v4.1-flash"), "DeepSeek V4.1 Flash");
   assert.equal(friendlyModelName("opencode/space-bunny-free"), "Space Bunny");
+  assert.equal(friendlyModelName("claude-code/opus"), "Opus 5.5");
+  assert.equal(friendlyModelName("claude-code/sonnet"), "Sonnet 5.5");
+  assert.equal(friendlyModelName("claude-code/haiku"), "Haiku 5.5");
+  assert.equal(friendlyModelName("claude-opus-5-5"), "Claude Opus 5.5");
+  assert.equal(friendlyModelName("opencode-go/claude-haiku-5-5"), "Claude Haiku 5.5");
   assert.equal(isBlockedFreeTierModel("openrouter/some-model-free"), false, "only OpenCode's own free tier is app-locked");
 });
 

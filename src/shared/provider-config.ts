@@ -219,12 +219,27 @@ export function isBlockedFreeTierModel(model: string): boolean {
 
 const MODEL_WORDS: Record<string, string> = { gpt: "GPT", glm: "GLM", ai: "AI", llm: "LLM", vl: "VL", exp: "Experimental", hy: "HY", deepseek: "DeepSeek" };
 
-/** "opencode-go/gpt-5.6-luna" → "GPT 5.6 Luna". */
+/** Claude is chosen by short name (claude-code/opus) and always runs the
+ * newest model of that name. This is the number to show next to it; update it
+ * when a new Claude generation ships. */
+const CLAUDE_ALIAS_VERSIONS: Record<string, string> = { opus: "5.5", sonnet: "5.5", haiku: "5.5" };
+
+/** "opencode-go/gpt-5.6-luna" → "GPT 5.6 Luna"; "claude-code/opus" → "Opus 5.5". */
 export function friendlyModelName(model: string): string {
   if (model === "apple/on-device") return "Apple Intelligence";
   const tail = model.split("/").at(-1) || model;
+  const alias = model.startsWith("claude-code/") ? tail.toLowerCase() : "";
+  if (alias && CLAUDE_ALIAS_VERSIONS[alias]) return `${alias.charAt(0).toUpperCase()}${alias.slice(1)} ${CLAUDE_ALIAS_VERSIONS[alias]}`;
   // The tier is shown separately, so "space-bunny-free" reads "Space Bunny".
-  return tail.split(/[-_]/).filter(Boolean).filter((word, index, words) => !(index === words.length - 1 && index > 0 && word.toLowerCase() === "free")).map((word) => {
+  const parts = tail.split(/[-_]/).filter(Boolean).filter((word, index, words) => !(index === words.length - 1 && index > 0 && word.toLowerCase() === "free"));
+  // "opus-5-5" is version 5.5: a one-digit number followed by a short one.
+  const words: string[] = [];
+  for (const word of parts) {
+    const previous = words.at(-1);
+    if (previous && /^\d$/.test(previous) && /^\d{1,2}$/.test(word) && !/^\d+$/.test(words.at(-2) ?? "")) words[words.length - 1] = `${previous}.${word}`;
+    else words.push(word);
+  }
+  return words.map((word) => {
     const lower = word.toLowerCase();
     if (MODEL_WORDS[lower]) return MODEL_WORDS[lower];
     const acronym = /^([a-z]{1,4})(\d.*)$/i.exec(word);
