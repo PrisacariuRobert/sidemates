@@ -42,7 +42,7 @@ function parse(args) {
   const rest = args.slice(1);
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
-    if (arg === "--auto") out.auto = true;
+    if (arg === "--auto" || arg === "--standalone") { if (arg === "--auto") out.auto = true; }
     else if (arg === "--format") { if (rest[++i] !== "json") return null; }
     else if (["--model", "--dir", "--agent", "--session", "--title", "--file"].includes(arg)) {
       const value = rest[++i];
@@ -52,7 +52,9 @@ function parse(args) {
     else if (i === rest.length - 1) out.prompt = arg;
     else return null;
   }
-  if (!out.prompt || !out.model || !out.model.includes("/") || !out.dir) return null;
+  if (!out.prompt || !out.model || !out.model.includes("/")) return null;
+  // OpenCode 2.x has no --dir: the working folder is the project.
+  out.dir ||= process.cwd();
   return out;
 }
 

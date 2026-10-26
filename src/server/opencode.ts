@@ -18,6 +18,7 @@ import { prepareConsultationFiles } from "./consultation-files.js";
 import { routeBotReply } from "./group-routing.js";
 import { decideTaskOutcome } from "./task-outcome.js";
 import { friendlyModelName, modelBelongsToConnection } from "../shared/provider-config.js";
+import { standaloneArgs } from "./opencode-flags.js";
 import { aiRest, classifyJob, isLimitError, rankAi, type AiConnection } from "./ai-router.js";
 import { toolAvailability } from "./tool-availability.js";
 import { CommunitySkills } from "./community-skills.js";
@@ -585,7 +586,8 @@ export class OpenCodeRunner {
     // option, so without it a trailing prompt is read as a tool name and the run stops with no input.
     const args = useClaude
       ? ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model.replace(/^claude-code\//, ""), "--permission-mode", "dontAsk", "--tools", "", "--system-prompt", teammateSystemPrompt(bot), "--setting-sources", "project,local", "--mcp-config", mcpConfig, "--strict-mcp-config", "--allowedTools", `${claudeTools},mcp__openbot__work_collect,mcp__openbot__work_report,mcp__openbot__code_benchmark`, ...(previousSession ? ["--resume", previousSession] : []), "--", prompt]
-      : ["run", "--auto", "--format", "json", "--model", model, "--dir", workspace, "--agent", run.expectedWorkKind ? "openbot-report" : "openbot", ...attachedFiles.flatMap((file) => ["--file", file]), ...(previousSession ? ["--session", previousSession] : []), "--title", `${bot.name} · Sidemates`, prompt];
+      // No --dir: OpenCode 2.x removed it. The process starts in the teammate's workspace (cwd below), which is its project.
+      : ["run", "--auto", "--format", "json", "--model", model, ...standaloneArgs(), "--agent", run.expectedWorkKind ? "openbot-report" : "openbot", ...attachedFiles.flatMap((file) => ["--file", file]), ...(previousSession ? ["--session", previousSession] : []), "--title", `${bot.name} · Sidemates`, prompt];
     const runEnvironment = safeHostEnvironment(extraEnvironment);
     const liveOpenCode = !useClaude && liveOpenCodeAvailable(runEnvironment.PATH, Boolean(this.options.spawnProcess));
     const child = (this.options.spawnProcess || spawn)(useClaude ? "claude" : liveOpenCode ? process.execPath : "opencode", liveOpenCode ? [OPENCODE_LIVE_PATH, ...args] : args, { cwd: workspace, env: runEnvironment, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
