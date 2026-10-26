@@ -5,6 +5,7 @@ import { macFallbackAllowed } from "./mac-productivity.js";
 import { McpConnections } from "./mcp-connections.js";
 import { CommunitySkills } from "./community-skills.js";
 import { webResearchEnabled } from "./web-research.js";
+import { findTool, videoToolsAvailable } from "./video-render.js";
 
 // Context reduction only. The tool endpoints remain the authorization boundary
 // and recheck grants when a call arrives, including after session revocation.
@@ -28,6 +29,8 @@ export function toolAvailability(
     message_teammate: true,
     spreadsheet_export: true,
     document_export: true,
+    video_render: videoToolsAvailable(),
+    video_fetch: bot.browserEnabled && Boolean(findTool("yt-dlp")),
     web_search: bot.browserEnabled && webResearchEnabled(),
     web_read: bot.browserEnabled && webResearchEnabled(),
     spreadsheet_inspect: true,
