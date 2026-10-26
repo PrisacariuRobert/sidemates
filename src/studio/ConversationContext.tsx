@@ -1,11 +1,23 @@
 import { useState } from "react";
-import { ArrowRight, CalendarDays, ShieldQuestion } from "lucide-react";
+import { ArrowRight, CalendarDays } from "lucide-react";
 import type { AppState, Bot, Run } from "../shared/types";
 import { Character } from "./Character";
 import { BrowserAccessCard } from "./BrowserAccessCard";
 import { ChoiceMenu } from "./ChoiceMenu";
 import { LiveComputer } from "./LiveComputer";
-import { orderContextRuns } from "./context-runs";
+import { contextRunState, contextRunTitle, orderContextRuns } from "./context-runs";
+import { friendlyModelName } from "../shared/provider-config";
+
+function ContextWork({ run, onRun }: { run: Run; onRun: (run: Run) => void }) {
+  const title = contextRunTitle(run), { state, label } = contextRunState(run);
+  return (
+    <button className="context-work" title={title} aria-label={`Work: ${title}`} onClick={() => onRun(run)}>
+      <strong>{title}</strong>
+      <small className={`context-state ${state}`}><i aria-hidden="true" />{label}</small>
+      <ArrowRight size={13} />
+    </button>
+  );
+}
 
 export function ConversationContext({
   state,
@@ -47,23 +59,24 @@ export function ConversationContext({
   return (
     <div className="conversation-context-content">
       {onToggleSafety && (
-        <section className="safety-card" aria-label="Safety">
-          <h3>Safety</h3>
-          <p>
-            {yoloMode
-              ? "Autopilot is on: sends, posts and purchases go ahead without asking. Sign-ins, access grants and more AI spending still pause."
-              : "Ask first: work can start, but sensitive actions wait for your approval."}
-          </p>
+        <section className="safety-row" aria-label="Safety">
+          <span className="safety-copy">
+            <strong>Autopilot</strong>
+            <small>
+              {yoloMode
+                ? "On. Sends, posts and purchases go ahead without asking. Sign-ins, access and extra AI spending still pause."
+                : "Off. Work starts right away; sensitive actions wait for your approval."}
+            </small>
+          </span>
           <button
             type="button"
-            className="safety-toggle"
-            aria-pressed={yoloMode === true}
+            role="switch"
+            aria-checked={yoloMode === true}
+            aria-label="Autopilot"
+            className="switch"
             disabled={safetyBusy}
             onClick={onToggleSafety}
-          >
-            <ShieldQuestion size={15} />
-            {yoloMode ? "Autopilot on" : "Ask first on"}
-          </button>
+          ><i /></button>
         </section>
       )}
       {!bot && (
@@ -90,7 +103,7 @@ export function ConversationContext({
             />
             <div>
               <strong>{selected.name}</strong>
-              <p>{selected.role}</p>
+              <p>{selected.role}{selected.model ? ` · ${selected.aiMode === "automatic" ? "Auto · " : ""}${friendlyModelName(selected.model)}` : ""}</p>
             </div>
           </div>
           <LiveComputer bot={selected} threadId={selected.threadId} onTakeover={onTakeover} />
@@ -103,37 +116,11 @@ export function ConversationContext({
         </div>
         {currentRuns.length ? (
           <>
-          {currentRuns.map((run) => (
-            <button
-              className="context-work"
-              key={run.id}
-              title={run.task?.goal || run.prompt}
-              aria-label={`Work: ${run.task?.goal || run.prompt}`}
-              onClick={() => onRun(run)}
-            >
-              <strong>{run.task?.goal || run.prompt}</strong>
-              <small>
-                {run.status === "awaiting_approval"
-                  ? "Needs your review"
-                  : run.status === "completed"
-                    ? "Finished"
-                    : run.status === "waiting_for_teammate"
-                      ? "Consulting the team"
-                      : run.status}
-              </small>
-              <ArrowRight size={13} />
-            </button>
-          ))}
+          {currentRuns.map((run) => <ContextWork key={run.id} run={run} onRun={onRun} />)}
           {olderRuns.length > 0 && (
             <details className="context-work-history">
               <summary>Earlier work ({olderRuns.length})</summary>
-              {olderRuns.map((run) => (
-                <button className="context-work" key={run.id} title={run.task?.goal || run.prompt} aria-label={`Work: ${run.task?.goal || run.prompt}`} onClick={() => onRun(run)}>
-                  <strong>{run.task?.goal || run.prompt}</strong>
-                  <small>{run.status === "failed" ? "Failed" : run.status === "completed" ? "Finished" : run.status}</small>
-                  <ArrowRight size={13} />
-                </button>
-              ))}
+              {olderRuns.map((run) => <ContextWork key={run.id} run={run} onRun={onRun} />)}
             </details>
           )}
           </>

@@ -10,10 +10,10 @@ import {
 } from "lucide-react";
 import { SettingsCard, SettingsGroup, SettingsRow, SegmentedControl } from "../studio/Settings";
 import { ProviderIcon } from "../ProviderIcon";
+import { ModelPicker } from "./ModelPicker";
 import {
   isFreeTierModel,
   isBlockedFreeTierModel,
-  defaultModelChoice,
   mayTrainOnPrompts,
   modelChoices,
   TRAINING_NOTICE,
@@ -155,7 +155,6 @@ export function ProviderPanel({
   const [notice, setNotice] = useState<string | null>(null);
   const [initialConnection, setInitialConnection] = useState("");
   const [initialModel, setInitialModel] = useState("");
-  const [pendingConnections, setPendingConnections] = useState<Record<string, string>>({});
   const needsChoice = bots.some((bot) => !bot.providerInstanceId && !bot.model);
   const openCodeEntry = provider?.catalog.find((entry) => entry.id === "opencode");
   // A saved key that failed its test still needs the simple path: paste again.
@@ -354,9 +353,13 @@ export function ProviderPanel({
           ) : entry.id === "google" && entry.installed ? (
             <KeyPaste providerId="google" link="https://aistudio.google.com/apikey" linkLabel="Get a free key" placeholder="Paste your Gemini API key" onSaved={afterConnect} />
           ) : (
-            <span className="ai-state">
-              {entry.id === "opencode" && entry.installed ? "Paste a key above" : entry.installed ? "Set up in OpenCode" : "Setup needed"}
-            </span>
+            entry.id === "opencode" && entry.installed ? (
+              <KeyPaste providerId="opencode-go" link="https://opencode.ai/go" linkLabel="Get a key" placeholder="Paste your OpenCode Go key" onSaved={afterConnect} />
+            ) : (
+              <span className="ai-state">
+                {entry.installed ? "Set up in OpenCode" : "Setup needed"}
+              </span>
+            )
           )
         }
       />
@@ -771,112 +774,28 @@ export function ProviderPanel({
         </SettingsGroup>
       )}
       <SettingsGroup title="Choose for each teammate">
-        <p>Mix subscriptions and models to suit the work. Your current choice stays active until you select a different model.</p>
+        <p>Pick an AI for each teammate, or leave it on Automatic. You can also change it from the message box in any chat.</p>
         <SettingsCard>
-          {bots.map((bot) => {
-            const automatic = bot.aiMode === "automatic";
-            const selectedConnectionId = pendingConnections[bot.id] ?? (automatic ? "automatic" : bot.providerInstanceId ?? "");
-            const changingConnection = selectedConnectionId !== (automatic ? "automatic" : bot.providerInstanceId ?? "");
-            const connection = provider?.instances.find(
-              (entry) => entry.id === selectedConnectionId,
-            );
-            const models = [
-              ...new Set([...(changingConnection ? [] : [bot.model]), ...(connection?.models || [])].filter(Boolean)),
-            ];
-            return (
-              <div key={bot.id} className="ai-teammate">
-                <div className="ai-teammate-title">
-                  {mascot(bot)}
-                  <strong>{bot.name}</strong>
-                  <span>{bot.role}</span>
-                </div>
-                <SettingsRow
-                  title="Connection"
-                  control={
-                    <select
-                      aria-label={`${bot.name} connection`}
-                      value={selectedConnectionId}
-                      disabled={busy !== null || !provider}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        // Automatic needs no model: Sidemates picks one before each job.
-                        if (value === "automatic") {
-                          void act(bot.id, async () => {
-                            await onUpdateBot(bot.id, { aiMode: "automatic" });
-                            setPendingConnections((previous) => { const next = { ...previous }; delete next[bot.id]; return next; });
-                          });
-                          return;
-                        }
-                        setPendingConnections((previous) => ({ ...previous, [bot.id]: value }));
-                      }}
-                    >
-                      {!connection && selectedConnectionId !== "automatic" && (
-                        <option value="">Choose a connection</option>
-                      )}
-                      <option value="automatic">Automatic · the best AI you have for each job</option>
-                      {provider?.instances.map((entry) => (
-                        <option
-                          key={entry.id}
-                          value={entry.id}
-                          disabled={!entry.connected || !entry.models?.length}
-                        >
-                          {entry.name}
-                          {!entry.connected ? " · setup needed" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  }
-                >
-                  {changingConnection && <p className="settings-row-note">Choose a model below to switch {bot.name}. Their current connection is still active.</p>}
-                  {automatic && !changingConnection && <p className="settings-row-note">Sidemates picks the best AI you've connected for each job{bot.model ? `, now ${modelLabel(bot.model)}` : ""}, and switches if one runs out.</p>}
-                </SettingsRow>
-                <SettingsRow
-                  title="Model"
-                  control={
-                    <select
-                      aria-label={`${bot.name} model`}
-                      value={changingConnection ? "" : bot.model}
-                      disabled={busy !== null || !connection?.connected || (automatic && !changingConnection)}
-                      onChange={(event) => {
-                        const model = event.target.value;
-                        if (!model) return;
-                        void act(bot.id, async () => {
-                          await onUpdateBot(bot.id, { providerInstanceId: selectedConnectionId, model, aiMode: "chosen" });
-                          setPendingConnections((previous) => {
-                            const next = { ...previous };
-                            delete next[bot.id];
-                            return next;
-                          });
-                        });
-                      }}
-                    >
-                      {(changingConnection || !bot.model) && <option value="">Choose a model</option>}
-                      {models.map((model) => (
-                        <option key={model} value={model} disabled={isBlockedFreeTierModel(model) && model !== bot.model}>
-                          {modelLabel(model)}
-                          {connection?.models?.includes(model)
-                            ? isBlockedFreeTierModel(model) ? " · works only inside OpenCode" : mayTrainOnPrompts(model) ? " · may train on your prompts" : isFreeTierModel(model) ? " · Free tier" : model === defaultModelChoice(connection.models || []) ? " · Recommended" : ""
-                            : " · unavailable"}
-                        </option>
-                      ))}
-                    </select>
-                  }
-                >
-                  {isBlockedFreeTierModel(bot.model) ? (
-                    <p className="settings-row-note">{bot.name} can't work on this model: OpenCode's free tier only answers inside OpenCode's own app. Choose another model.</p>
-                  ) : mayTrainOnPrompts(bot.model) ? (
-                    <p className="settings-row-note">{TRAINING_NOTICE} Choose another model if {bot.name} reads your mail, messages or files.</p>
-                  ) : isFreeTierModel(bot.model) && (
-                    <p className="settings-row-note">Free-tier access may not allow Sidemates teammate runs. A connection test only proves a short reply; try a real task before relying on this model.</p>
-                  )}
-                </SettingsRow>
+          {bots.map((bot) => (
+            <div key={bot.id} className="ai-teammate-row">
+              <div className="ai-teammate-title">
+                {mascot(bot)}
+                <span><strong>{bot.name}</strong><small>{bot.role}</small></span>
               </div>
-            );
-          })}
+              <ModelPicker variant="field" bot={bot} provider={provider} save={(patch) => onUpdateBot(bot.id, patch)} />
+              {bot.aiMode !== "automatic" && isBlockedFreeTierModel(bot.model) ? (
+                <p className="settings-row-note">{bot.name} can't work on this model: OpenCode's free tier only answers inside OpenCode's own app. Choose another model.</p>
+              ) : bot.aiMode !== "automatic" && mayTrainOnPrompts(bot.model) ? (
+                <p className="settings-row-note">{TRAINING_NOTICE} Choose another model if {bot.name} reads your mail, messages or files.</p>
+              ) : bot.aiMode !== "automatic" && isFreeTierModel(bot.model) ? (
+                <p className="settings-row-note">Free-tier access may not allow Sidemates teammate runs. Try a real task before relying on this model.</p>
+              ) : null}
+            </div>
+          ))}
         </SettingsCard>
       </SettingsGroup>
       <p className="ai-footnote">
-        OpenCode {provider?.version || "not detected"} · Connections belong to
+        OpenCode {versionNumber ? `v${versionNumber}` : "not detected"} · Connections belong to
         this Sidemates host.
       </p>
     </div>

@@ -65,6 +65,7 @@ import { Temporal } from "@js-temporal/polyfill";
 import { calendarMonthDays } from "../shared/calendar-grid";
 import { activeNowBots } from "../shared/presence";
 import { friendlyModelName } from "../shared/provider-config";
+import { ModelPicker, useProviderStatus } from "../components/ModelPicker";
 import type {
   AppState,
   Bot,
@@ -663,6 +664,7 @@ export function Studio() {
     [draftNotice, setDraftNotice] = useState(""),
     [online, setOnline] = useState(false),
     [refresh, setRefresh] = useState(0);
+  const providerStatus = useProviderStatus(refresh);
   // The reply as it is written, per run, pushed by the studio event stream.
   const [liveTexts, setLiveTexts] = useState<Record<string, string>>({});
   const [sendErrors, setSendErrors] = useState<Record<string, string>>({});
@@ -1226,6 +1228,20 @@ export function Studio() {
         void attached.add(files);
       }}
     >
+      {page === "chat" && conversationBot && (
+        <div className="composer-model">
+          <ModelPicker
+            bot={conversationBot}
+            provider={providerStatus}
+            direction="up"
+            save={async (patch) => {
+              const response = await fetch(`/api/bots/${encodeURIComponent(conversationBot.id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+              if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error || "That AI choice could not be saved.");
+              setRefresh((n) => n + 1);
+            }}
+          />
+        </div>
+      )}
       <input
         ref={fileInput}
         type="file"
