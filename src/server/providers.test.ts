@@ -196,3 +196,19 @@ test("the first check of a program waits longer, later ones don't", async () => 
   await steadyCheck("fixture first launch", async () => ({ code: 0, stdout: "1.18.31", stderr: "" }));
   assert.equal(checkTimeout("fixture first launch"), 15_000);
 });
+
+test("OpenCode sign-ins are found in the current and the older list wording", async () => {
+  const { openCodeSignIns } = await import("./providers.js");
+  // OpenCode 2.x: a table of provider, kind and state.
+  const current = "OpenAI            API key                     stored\nOpenCode Console  API key                     stored\n";
+  assert.deepEqual(openCodeSignIns(current), { opencode: true, openai: true, copilot: false, gitlab: false, xai: false, google: false });
+  // Older versions: bullets, box lines and short kinds.
+  const older = "\u250c  Credentials ~/.local/share/opencode/auth.json\n\u2502\n\u25cf  OpenCode Zen api\n\u2502\n\u25cf  GitHub Copilot oauth\n\u2502\n\u25cf  Google api\n\u2514  3 credentials\n";
+  assert.deepEqual(openCodeSignIns(older), { opencode: true, openai: false, copilot: true, gitlab: false, xai: false, google: true });
+  const goOnly = "\u001b[32mOpenCode Go\u001b[0m  api  stored";
+  assert.equal(openCodeSignIns(goOnly).opencode, true);
+  // Nothing stored, or a different product with a similar name, is not a sign-in.
+  assert.deepEqual(openCodeSignIns("No credentials found\n0 credentials\n"), { opencode: false, openai: false, copilot: false, gitlab: false, xai: false, google: false });
+  assert.equal(openCodeSignIns("OpenCodeX  API key  stored").opencode, false);
+});
+
