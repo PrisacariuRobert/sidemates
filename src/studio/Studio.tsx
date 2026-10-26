@@ -147,6 +147,16 @@ const dayKey = (date: string | number | Date) => {
   const d = new Date(date);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
+/** Sidebar grouping, the way a messages list reads: Today, Yesterday, then
+ * everything older. Rows keep the order they arrive in. */
+const conversationDayGroup = (date: string | null | undefined, now = new Date()) => {
+  if (!date) return "Earlier";
+  const key = dayKey(date);
+  if (key === dayKey(now)) return "Today";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  return key === dayKey(yesterday) ? "Yesterday" : "Earlier";
+};
 const timeText = (date: string) =>
   new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const dateText = (date: string) =>
@@ -779,11 +789,41 @@ export function Studio() {
   const [takeoverBot, setTakeoverBot] = useState<Bot | null>(null);
   const [signInPane, setSignInPane] = useState<string | null>(null);
   const [narrow, setNarrow] = useState(() => window.innerWidth < 1050);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem("sidemates:sidebar-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSidebar = () => {
+    setSidebarCollapsed((value) => {
+      const next = !value;
+      try {
+        window.localStorage.setItem("sidemates:sidebar-collapsed", next ? "1" : "0");
+      } catch {
+        /* Private mode: collapse still works for this visit. */
+      }
+      return next;
+    });
+  };
   useEffect(() => {
     const media = window.matchMedia("(max-width: 1049px)");
     const update = () => setNarrow(media.matches);
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b" && !event.shiftKey && !event.altKey) {
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+        event.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
   // Split view: when a teammate waits on a private sign-in in this
   // conversation, open the live website beside the chat, the way a second
@@ -803,6 +843,13 @@ export function Studio() {
     messageScroll = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true),
     requestNumber = useRef(0);
+  // Composer auto-grow: keep the one-line start, grow to 240px, then scroll.
+  useEffect(() => {
+    const box = input.current;
+    if (!box) return;
+    box.style.height = "auto";
+    box.style.height = `${Math.min(box.scrollHeight, 240)}px`;
+  }, [draft, thread, page]);
   useEffect(() => {
     if (!thread) return;
     const url = new URL(window.location.href); url.searchParams.set("thread", thread);
@@ -1168,6 +1215,15 @@ export function Studio() {
     <form
       className={`composer ${page === "chat" ? "composer-chat" : ""}`}
       onSubmit={send}
+      onDragOver={(event) => {
+        if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        const files = Array.from(event.dataTransfer?.files || []);
+        if (!files.length) return;
+        event.preventDefault();
+        void attached.add(files);
+      }}
     >
       <input
         ref={fileInput}
@@ -1248,7 +1304,19 @@ export function Studio() {
               : "Ask anything. Make a plan. Get something done."
         }
         rows={1}
+        onPaste={(event) => {
+          const files = Array.from(event.clipboardData?.files || []);
+          if (!files.length) return;
+          event.preventDefault();
+          void attached.add(files);
+        }}
         onKeyDown={(event) => {
+          // Cmd/Ctrl+Enter always sends, even with the mention menu open.
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            event.currentTarget.form?.requestSubmit();
+            return;
+          }
           if (mention && visibleMentions.length > 0) {
             if (event.key === "ArrowDown") {
               event.preventDefault();
@@ -1343,7 +1411,7 @@ export function Studio() {
           />
         </div></details>
         <span className="composer-hint">
-          {sending ? "Sending…" : !composerDraft.ready ? "Restoring draft…" : "Enter to send"}
+          {sending ? "Sending…" : !composerDraft.ready ? "Restoring draft…" : "Enter to send · ⌘↵ too"}
         </span>
         {/* One action slot, as in Messages: the microphone while the box is
             empty (or while dictating), Send once there is something to send. */}
@@ -1891,8 +1959,16 @@ export function Studio() {
     };
   const conversationRows = (
     <>
-      {visibleThreads.length > 0 && <span className="conversation-section-label">Recent</span>}
-      {visibleThreads.map(threadRow)}
+      {visibleThreads.map((item, index) => {
+        const group = conversationDayGroup(item.lastMessageAt ?? item.updatedAt);
+        const startsGroup = index === 0 || group !== conversationDayGroup(visibleThreads[index - 1].lastMessageAt ?? visibleThreads[index - 1].updatedAt);
+        return (
+          <Fragment key={item.id}>
+            {startsGroup && <span className="conversation-section-label">{group}</span>}
+            {threadRow(item)}
+          </Fragment>
+        );
+      })}
       {filteredConversationCount === 0 && (needsYouOnly || conversationQuery || Boolean(state?.bots.length)) && (
         <div className="conversation-list-empty" role="status">
           <img className="approved-face-mark" src="/design/openbot-face.svg" alt="" />
@@ -1932,13 +2008,23 @@ export function Studio() {
   );
   return (
     <div
-      className={`studio-shell ${documentFile && page === "chat" ? "with-document" : ""} ${contextOpen && !narrow && page === "chat" ? "with-context" : ""} ${signInPane && !narrow && page === "chat" ? "with-sign-in" : ""}`}
+      className={`studio-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${documentFile && page === "chat" ? "with-document" : ""} ${contextOpen && !narrow && page === "chat" ? "with-context" : ""} ${signInPane && !narrow && page === "chat" ? "with-sign-in" : ""}`}
     >
-      <aside className="sidebar">
-        <a className="wordmark" href="/">
+      <aside className="sidebar" aria-label={sidebarCollapsed ? "Collapsed conversation list" : "Conversation list"}>
+        <a className="wordmark" href="/" title="Sidemates home">
           <img className="approved-face-mark" src="/design/openbot-face.svg" alt="" />
-          sidemates
+          <span className="wordmark-text">sidemates</span>
         </a>
+        <button
+          type="button"
+          className="sidebar-collapse"
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-pressed={sidebarCollapsed}
+          title={sidebarCollapsed ? "Expand sidebar (Cmd+B)" : "Collapse sidebar (Cmd+B)"}
+          onClick={toggleSidebar}
+        >
+          {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
         <label className="conversation-search">
           <Search size={16} />
           <input

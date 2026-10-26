@@ -2527,3 +2527,134 @@ mark.mention { background: none; color: inherit; font-weight: 600; padding: 0; }
 
 /* Never just "I can't": the fix sits first under a stopped job. */
 .chat-event .stop-fix { margin-right: 12px; font-weight: 600; }
+
+/* Collapsible sidebar: Grok-style icon rail, Sidemates identity kept.
+ * Expanded 280px (existing), collapsed 72px. Labels hide, faces stay. */
+.studio-shell {
+  --sidebar-width: 280px;
+  --sidebar-width-collapsed: 72px;
+}
+.sidebar {
+  position: relative;
+}
+.sidebar-collapse {
+  position: absolute;
+  top: 24px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+}
+.sidebar-collapse:hover {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+.sidebar-collapse:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.studio-shell.sidebar-collapsed {
+  grid-template-columns: var(--sidebar-width-collapsed) minmax(0, 1fr);
+}
+.studio-shell.sidebar-collapsed.with-context {
+  grid-template-columns: var(--sidebar-width-collapsed) minmax(0, 1fr) 320px;
+}
+.studio-shell.sidebar-collapsed.with-sign-in {
+  grid-template-columns: var(--sidebar-width-collapsed) minmax(0, 1fr) minmax(360px, 42%);
+}
+.studio-shell.sidebar-collapsed .sidebar {
+  padding: 0 8px 16px;
+  align-items: center;
+  overflow-x: hidden;
+}
+.studio-shell.sidebar-collapsed .wordmark {
+  min-height: 80px;
+  padding-inline: 0;
+  justify-content: center;
+}
+.studio-shell.sidebar-collapsed .wordmark-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.studio-shell.sidebar-collapsed .sidebar-collapse {
+  position: static;
+  margin: 4px 0 8px;
+  width: 40px;
+  height: 40px;
+}
+.studio-shell.sidebar-collapsed .conversation-search {
+  margin: 0 0 12px;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  justify-content: center;
+}
+.studio-shell.sidebar-collapsed .conversation-search input {
+  display: none;
+}
+.studio-shell.sidebar-collapsed .sidebar-conversations {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.studio-shell.sidebar-collapsed .sidebar-conversations header {
+  padding: 0;
+  height: auto;
+  justify-content: center;
+}
+.studio-shell.sidebar-collapsed .sidebar-conversations header > span:first-child,
+.studio-shell.sidebar-collapsed .conversation-filters,
+.studio-shell.sidebar-collapsed .sidebar-section,
+.studio-shell.sidebar-collapsed .conversation-section-label,
+.studio-shell.sidebar-collapsed .active-now,
+.studio-shell.sidebar-collapsed .sidebar-extras {
+  display: none;
+}
+.studio-shell.sidebar-collapsed .conversation-row {
+  width: 48px;
+  height: 48px;
+  padding: 2px;
+  justify-content: center;
+}
+.studio-shell.sidebar-collapsed .conversation-copy,
+.studio-shell.sidebar-collapsed .conversation-heading time,
+.studio-shell.sidebar-collapsed .row-actions {
+  display: none;
+}
+.studio-shell.sidebar-collapsed .sidebar-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0 0;
+}
+.studio-shell.sidebar-collapsed .sidebar-bottom .workspace-link {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  justify-content: center;
+  font-size: 0;
+}
+.studio-shell.sidebar-collapsed .sidebar-bottom .workspace-link b {
+  display: none;
+}
+.studio-shell.sidebar-collapsed .sidebar-bottom > div:last-child > span {
+  display: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .studio-shell {
+    transition: grid-template-columns 200ms ease;
+  }
+  .studio-shell .sidebar {
+    transition: padding 200ms ease;
+  }
+}
