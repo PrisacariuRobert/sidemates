@@ -1,3 +1,4 @@
+import { AMBIENT_DENIED, teammatePermission } from "./teammate-permissions.js";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -314,15 +315,13 @@ ${operatingRules}
     "task_progress",
     "task_verify",
   ];
-  const ambientDenied = ["read", "write", "edit", "glob", "grep", "list", "bash", "webfetch", "websearch", "apply_patch", "lsp", "todowrite", "todoread", "task", "question", "skill"];
+  const ambientDenied = AMBIENT_DENIED;
   // Never let an ambient tool name slip in via availability (Gate 1a defect:
   // the mediated shell must be its own name, `isolated_bash`, so the native
   // `bash` primitive stays disabled even when the computer is enabled).
   const allowed = new Set<string>([...mediatedAlways, ...Object.entries(availableTools).filter(([name, on]) => on && !ambientDenied.includes(name)).map(([name]) => name)]);
   const tools = Object.fromEntries([...new Set([...Object.keys(availableTools), ...allowed, ...ambientDenied])].map((name) => [name, allowed.has(name)]));
-  const permission = reportOnly
-    ? { "*": "deny", work_collect: "allow", work_report: "allow" }
-    : { "*": "deny", external_directory: "deny", ...Object.fromEntries([...allowed].map((name) => [name, "allow"])) };
+  const permission = teammatePermission(allowed, reportOnly);
   writeFileSync(path.join(root, "opencode.json"), JSON.stringify({
     $schema: "https://opencode.ai/config.json",
     permission,

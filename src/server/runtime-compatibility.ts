@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { safeHostEnvironment } from "./runtime.js";
+import { checkOpencodeBoundary, type BoundaryResult } from "./runtime-boundary.js";
 
 /** Gate 1a: pin the verified OpenCode runtime. The runtime version is part of
  * the security boundary, so an unverified version fails closed for model
@@ -18,7 +19,10 @@ export const VERIFIED_OPENCODE_VERSION = "1.18.31";
 export interface RuntimeCompatibility {
   runtime: "opencode";
   detectedVersion: string | null;
-  compatibility: "verified" | "compatible" | "unsupported" | "unknown";
+  /** "checked": a version Sidemates has not seen, whose safety rules passed the automatic check (runtime-boundary.ts). */
+  compatibility: "verified" | "compatible" | "checked" | "unsupported" | "unknown";
+  /** Why a version failed the automatic check, in plain words. */
+  detail?: string;
 }
 
 /** A newer patch in the verified major.minor line is compatible: OpenCode
@@ -35,7 +39,7 @@ export function classifyOpencodeVersion(version: string): RuntimeCompatibility["
 }
 
 export function runtimeMayExecute(compatibility: RuntimeCompatibility["compatibility"]): boolean {
-  return compatibility === "verified" || compatibility === "compatible";
+  return compatibility === "verified" || compatibility === "compatible" || compatibility === "checked";
 }
 
 export const RUNTIME_INCOMPATIBLE_MESSAGE =
@@ -43,7 +47,11 @@ export const RUNTIME_INCOMPATIBLE_MESSAGE =
 
 let cached: RuntimeCompatibility | null = null;
 
-export function opencodeCompatibility(options: { refresh?: boolean; probe?: () => string | null } = {}): RuntimeCompatibility {
+/** One automatic safety check per version per run of Sidemates. */
+const boundaryVerdicts = new Map<string, BoundaryResult>();
+export function resetBoundaryVerdictsForTests() { boundaryVerdicts.clear(); }
+
+export function opencodeCompatibility(options: { refresh?: boolean; probe?: () => string | null; boundaryCheck?: () => BoundaryResult } = {}): RuntimeCompatibility {
   if (cached && !options.refresh) return cached;
   // A declared version (set by controlled fixtures) is still validated against
   // the verified version — this is not a bypass.
@@ -65,9 +73,20 @@ export function opencodeCompatibility(options: { refresh?: boolean; probe?: () =
   } catch {
     version = null;
   }
-  const next: RuntimeCompatibility = version
+  let next: RuntimeCompatibility = version
     ? { runtime: "opencode", detectedVersion: version, compatibility: classifyOpencodeVersion(version) }
     : { runtime: "opencode", detectedVersion: null, compatibility: "unknown" };
+  // A version we have not been told about is not blocked just for being new:
+  // the rules that keep teammates inside their limits are tested directly. An
+  // injected probe means a test is driving the version, so no real check then.
+  const boundaryCheck = options.boundaryCheck ?? (options.probe ? undefined : checkOpencodeBoundary);
+  if (version && next.compatibility === "unsupported" && boundaryCheck) {
+    const verdict = boundaryVerdicts.get(version) ?? boundaryCheck();
+    boundaryVerdicts.set(version, verdict);
+    next = verdict.ok
+      ? { runtime: "opencode", detectedVersion: version, compatibility: "checked" }
+      : { runtime: "opencode", detectedVersion: version, compatibility: "unsupported", detail: verdict.reasons.join(" ") };
+  }
   // A transient probe failure must not wedge the host: only definitive
   // verdicts are cached, so the next task re-probes instead of failing
   // forever on one bad reading.

@@ -977,6 +977,7 @@ app.get("/api/readiness", async (_request, response) => {
     cliAvailable: status.cliAvailable,
     compatibility: compatibility.compatibility,
     detectedVersion: compatibility.detectedVersion,
+    compatibilityDetail: compatibility.detail,
     connectedNames: connected.map((instance) => instance.name),
     readyTeammates,
     totalTeammates: db.listBots().length,

@@ -164,9 +164,26 @@ async function done() {
   process.exit(hadError ? 1 : 0);
 }
 
+/** The event stream closed. After a prompt was sent that means the work is over;
+ * before that nothing ran, so say so instead of exiting as if it had succeeded. */
+let promptSent = false;
+function ended() {
+  if (promptSent) return done();
+  if (finished) return;
+  finished = true;
+  // Nothing was sent, so there is nothing to reconcile: report it and stop.
+  write({ type: "error", timestamp: Date.now(), sessionID: sessionId, error: { name: "UnknownError", data: { message: "OpenCode stopped before the task started." } } });
+  stopAll();
+  process.exit(1);
+}
+
 async function subscribe(signal, onEvent) {
   const response = await fetch(`${base}/event`, { headers: auth, signal });
   if (!response.ok || !response.body) throw new Error("The OpenCode event stream did not open.");
+  // A newer OpenCode can answer this address with its web app instead of an
+  // event stream. That is not a stream: reading it would end at once and look
+  // like a finished task with no answer. Only a real stream counts.
+  if (!/text\/event-stream/i.test(response.headers.get("content-type") || "")) throw new Error("The OpenCode server did not offer the expected event stream.");
   const decoder = new TextDecoder();
   let buffer = "";
   (async () => {
@@ -180,8 +197,8 @@ async function subscribe(signal, onEvent) {
           try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip a malformed event */ }
         }
       }
-      if (!finished && !exiting) void done();
-    } catch { if (!finished && !exiting) void done(); }
+      if (!finished && !exiting) void ended();
+    } catch { if (!finished && !exiting) void ended(); }
   })();
 }
 
@@ -266,8 +283,10 @@ async function main() {
     }
   };
   try {
-    await subscribe(stream.signal, onEvent);
-    // Nothing has been sent yet: if setting up fails, run the plain way.
+    // Nothing has been sent yet, so an unfamiliar server (a newer OpenCode) just
+    // means: run the plain way, which every version supports.
+    try { await subscribe(stream.signal, onEvent); } catch { return fallBack(stream); }
+    // If setting up fails, run the plain way too.
     try {
       if (options.session) {
         sessionId = options.session;
@@ -280,7 +299,7 @@ async function main() {
       { type: "text", text: options.prompt },
       ...options.files.map((file) => { const path = resolve(options.dir, file); return { type: "file", mime: mimeFor(path), filename: basename(path), url: `file://${path}` }; }),
     ];
-    prompted = true;
+    prompted = true; promptSent = true;
     try {
       await api(`/session/${sessionId}/prompt_async${directory}`, { model: { providerID: options.model.slice(0, slash), modelID: options.model.slice(slash + 1) }, ...(options.agent ? { agent: options.agent } : {}), parts });
     } catch (error) {
