@@ -9,6 +9,7 @@ import {
   Plus,
 } from "lucide-react";
 import { SettingsCard, SettingsGroup, SettingsRow, SegmentedControl } from "../studio/Settings";
+import { ProviderIcon } from "../ProviderIcon";
 import {
   isFreeTierModel,
   isBlockedFreeTierModel,
@@ -138,6 +139,7 @@ export function ProviderPanel({
   modelLabel,
 }: Props) {
   const [mode, setMode] = useState<"accounts" | "api">("accounts");
+  const [selectedAccount, setSelectedAccount] = useState("");
   const [adding, setAdding] = useState(false);
   const [preset, setPreset] = useState("openai");
   const [name, setName] = useState(presets.openai!.name);
@@ -366,6 +368,70 @@ export function ProviderPanel({
     if (result?.ok) setNotice("Connected and working. Choose it when you create a teammate.");
     else { setNotice(null); setError(result?.error ? `Connected, but the test didn't pass: ${result.error}` : "Connected. The first test didn't finish; try “Test connection” below in a moment."); }
   };
+  // One list of every sign-in on the left, the chosen one on the right: its
+  // status, test, models and which teammates use it.
+  const accounts = provider?.catalog || [];
+  const versionNumber = /\d+(?:\.\d+)+/.exec(provider?.version || "")?.[0] || "";
+  const selected = accounts.find((entry) => entry.id === selectedAccount) || accounts.find((entry) => entry.connected) || accounts[0];
+  const accountStatus = (entry: ProviderCatalogEntry) => (entry.connected ? "Signed in" : entry.installed ? "Not signed in" : "Not set up");
+  const usedBy = (entry: ProviderCatalogEntry) =>
+    bots.filter((bot) => (entry.connectionId && bot.providerInstanceId === entry.connectionId) || (!bot.providerInstanceId && bot.model && entry.models.includes(bot.model)));
+  const accountBrowser = accounts.length > 0 && selected && (
+    <div className="provider-split">
+      <ul className="provider-list" aria-label="Providers">
+        {accounts.map((entry) => (
+          <li key={entry.id}>
+            <button
+              type="button"
+              className={`provider-item${entry.id === selected.id ? " selected" : ""}`}
+              aria-current={entry.id === selected.id ? "true" : undefined}
+              onClick={() => setSelectedAccount(entry.id)}
+            >
+              <ProviderIcon id={entry.id} className="provider-item-icon" />
+              <span className="provider-item-copy">
+                <strong>{entry.shortName || entry.name}{entry.id === "opencode" && versionNumber ? <code>v{versionNumber}</code> : null}</strong>
+                <small>{accountStatus(entry)}</small>
+              </span>
+              <i className={`provider-dot${entry.connected ? " on" : ""}`} role="img" aria-label={entry.connected ? "Connected" : "Not connected"} />
+            </button>
+          </li>
+        ))}
+      </ul>
+      <section className="provider-detail" aria-label={`${selected.name} details`}>
+        <header className="provider-detail-head">
+          <ProviderIcon id={selected.id} className="provider-detail-icon" />
+          <h4>{selected.name}</h4>
+          {selected.id === "opencode" && versionNumber && <code>v{versionNumber}</code>}
+        </header>
+        <SettingsCard>{accountRow(selected)}</SettingsCard>
+        {selected.models.length > 0 && (
+          <div className="provider-models">
+            <h5>Models</h5>
+            <ul>
+              {selected.models.slice(0, 24).map((model) => {
+                const inUse = usedBy(selected).some((bot) => bot.model === model);
+                return <li key={model} className={inUse ? "in-use" : undefined} title={model}>{modelLabel(model)}{inUse && <small>In use</small>}</li>;
+              })}
+            </ul>
+            {selected.models.length > 24 && <p className="ai-help">And {selected.models.length - 24} more.</p>}
+          </div>
+        )}
+        {usedBy(selected).length > 0 && (
+          <div className="provider-users">
+            <h5>Teammates using it</h5>
+            <ul>
+              {usedBy(selected).map((bot) => (
+                <li key={bot.id}>
+                  <span className="provider-user-face">{mascot(bot)}</span>
+                  <span><strong>{bot.name}</strong><small>{bot.aiMode === "automatic" ? "Automatic · " : ""}{bot.model ? modelLabel(bot.model) : "No model chosen"}</small></span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+    </div>
+  );
   return (
     <div className="provider-settings">
       {provider && !provider.instances.some((entry) => entry.connected && connectionTests[entry.id]?.ok !== false) && <BringYourAI onConnected={afterConnect} />}
@@ -464,19 +530,7 @@ export function ProviderPanel({
       </div>
       {mode === "accounts" ? (
         <SettingsGroup title="Accounts & subscriptions">
-          <SettingsCard>
-            {provider?.catalog
-              .filter((entry) => !["gitlab", "xai"].includes(entry.id))
-              .map(accountRow)}
-          </SettingsCard>
-          <details className="ai-more">
-            <summary>More accounts</summary>
-            <SettingsCard>
-              {provider?.catalog
-                .filter((entry) => ["gitlab", "xai"].includes(entry.id))
-                .map(accountRow)}
-            </SettingsCard>
-          </details>
+          {accountBrowser}
           <p className="ai-help">
             Sign-in uses the installed provider runtime. A saved sign-in doesn’t
             guarantee model access; plan eligibility, provider rules, and usage

@@ -64,6 +64,7 @@ import remarkGfm from "remark-gfm";
 import { Temporal } from "@js-temporal/polyfill";
 import { calendarMonthDays } from "../shared/calendar-grid";
 import { activeNowBots } from "../shared/presence";
+import { friendlyModelName } from "../shared/provider-config";
 import type {
   AppState,
   Bot,
@@ -2124,7 +2125,7 @@ export function Studio() {
                     setDetail({ kind: "teammate", bot: conversationBot })
                   }
                 >
-                  <span className="conversation-title-copy"><span className="conversation-name">{title}</span><small>{conversationBot.role}</small></span>
+                  <span className="conversation-title-copy"><span className="conversation-name">{title}</span><small>{conversationBot.role}{conversationBot.model ? ` · ${conversationBot.aiMode === "automatic" ? "Auto · " : ""}${friendlyModelName(conversationBot.model)}` : ""}</small></span>
                   <ChevronDown size={13} />
                 </button>
               </>
