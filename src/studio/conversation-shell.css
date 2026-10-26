@@ -2687,3 +2687,13 @@ mark.mention { background: none; color: inherit; font-weight: 600; padding: 0; }
 .context-state.active i { background: #3b82f6; }
 .context-state.review i { background: #f59e0b; }
 .context-state.failed i { background: #ef4444; }
+
+/* A teammate's own picture, drawn wherever their mascot would be. */
+.character.character-avatar { display: inline-block; flex: none; border-radius: 50%; overflow: hidden; background: var(--surface-muted); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent); animation: none; }
+.character.character-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.avatar-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 14px; }
+.avatar-upload, .avatar-remove { position: relative; display: inline-flex; align-items: center; padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.avatar-upload:hover, .avatar-remove:hover:not(:disabled) { background: var(--surface-muted); }
+.avatar-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.avatar-upload:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.avatar-upload.disabled, .avatar-remove:disabled { opacity: .55; pointer-events: none; }

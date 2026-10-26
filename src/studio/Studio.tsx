@@ -78,7 +78,7 @@ import type {
 } from "../shared/types";
 import type { CommunitySkill } from "../shared/extensions";
 import { ConnectorIcon } from "../ConnectorIcon";
-import { Character } from "./Character";
+import { Character, setAvatars } from "./Character";
 import { CreateTeammate } from "./CreateTeammate";
 import { WeeklyRecapEntry } from "./WeeklyRecap";
 import { WaitingEntry, WaitingForYou } from "./WaitingForYou";
@@ -665,6 +665,9 @@ export function Studio() {
     [online, setOnline] = useState(false),
     [refresh, setRefresh] = useState(0);
   const providerStatus = useProviderStatus(refresh);
+  useEffect(() => {
+    setAvatars(Object.fromEntries((state?.bots || []).filter((bot) => bot.avatarVersion).map((bot) => [bot.name, `/api/bots/${encodeURIComponent(bot.id)}/avatar?v=${bot.avatarVersion}`])));
+  }, [state?.bots]);
   // The reply as it is written, per run, pushed by the studio event stream.
   const [liveTexts, setLiveTexts] = useState<Record<string, string>>({});
   const [sendErrors, setSendErrors] = useState<Record<string, string>>({});

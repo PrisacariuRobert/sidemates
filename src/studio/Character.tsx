@@ -1,6 +1,19 @@
-import { useId, type CSSProperties } from "react";
+import { useId, useSyncExternalStore, type CSSProperties } from "react";
 import { mascotBodies } from "./mascot-catalog";
 import type { MascotKind } from "../shared/types";
+
+/** Teammates that have their own picture, by name, filled in once from the
+ * studio state. Every face draws through Character, so this is the one place
+ * that decides picture or mascot. */
+let avatars: Record<string, string> = {};
+const avatarListeners = new Set<() => void>();
+export function setAvatars(next: Record<string, string>) {
+  if (JSON.stringify(next) === JSON.stringify(avatars)) return;
+  avatars = next;
+  avatarListeners.forEach((listener) => listener());
+}
+const subscribeAvatars = (listener: () => void) => { avatarListeners.add(listener); return () => { avatarListeners.delete(listener); }; };
+const readAvatars = () => avatars;
 
 /** Original animated vector family; shared by desktop and phones. */
 export function Character({
@@ -10,6 +23,7 @@ export function Character({
   size = 36,
   status = "ready",
   mood = "calm",
+  avatar,
 }: {
   name: string;
   color: string;
@@ -17,12 +31,28 @@ export function Character({
   size?: number;
   status?: string;
   mood?: "calm" | "curious" | "focused" | "happy";
+  /** Overrides the lookup by name, e.g. for a preview before it is saved. `null` forces the mascot. */
+  avatar?: string | null;
 }) {
   const id = useId().replaceAll(":", "");
+  const known = useSyncExternalStore(subscribeAvatars, readAvatars, readAvatars)[name];
+  const picture = avatar === undefined ? known : avatar;
   const seed = [...name].reduce((sum, char) => sum + char.charCodeAt(0), 0);
   const shape = Object.hasOwn(mascotBodies, variant)
     ? (variant as MascotKind)
     : "nova";
+  if (picture) {
+    return (
+      <span
+        className={`character character-avatar character-${status}`}
+        role="img"
+        aria-label={`${name}, ${status}`}
+        style={{ width: size, height: size }}
+      >
+        <img src={picture} alt="" width={size} height={size} draggable={false} />
+      </span>
+    );
+  }
   return (
     <svg
       className={`character character-${status} character-mood-${mood}`}

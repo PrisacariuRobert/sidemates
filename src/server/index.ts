@@ -117,6 +117,7 @@ import { DiscordChannel } from "./discord-channel.js";
 import { weeklyRecap } from "../shared/weekly-recap.js";
 import { exportDocument } from "./document-export.js";
 import { fetchVideo } from "./video-fetch.js";
+import { readAvatar, removeAvatar, saveAvatar } from "./avatars.js";
 import { renderVideo } from "./video-render.js";
 import { webRead, webResearchEnabled, webSearch } from "./web-research.js";
 import { AwakeGuard } from "./awake-guard.js";
@@ -3252,6 +3253,33 @@ app.post("/api/bots/import", (request, response) => {
   }
 });
 
+app.post("/api/bots/:id/avatar", express.raw({ type: "application/octet-stream", limit: "7mb" }), async (request, response) => {
+  const bot = db.getBot(request.params.id);
+  if (!bot) return response.status(404).json({ error: "Teammate not found." });
+  if (!Buffer.isBuffer(request.body)) return response.status(400).json({ error: "Choose a picture to use." });
+  try {
+    const version = await saveAvatar(db.dataDir, bot.id, request.body);
+    const updated = db.setBotAvatarVersion(bot.id, version);
+    response.json(updated);
+    broadcast();
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : "That picture could not be used." });
+  }
+});
+app.get("/api/bots/:id/avatar", (request, response) => {
+  const bot = db.getBot(request.params.id);
+  const bytes = bot?.avatarVersion ? readAvatar(db.dataDir, bot.id) : null;
+  if (!bot || !bytes) return response.status(404).end();
+  // The URL carries the version, so a changed picture is a new URL.
+  response.set({ "Content-Type": "image/webp", "Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(bytes);
+});
+app.delete("/api/bots/:id/avatar", (request, response) => {
+  const bot = db.getBot(request.params.id);
+  if (!bot) return response.status(404).json({ error: "Teammate not found." });
+  removeAvatar(db.dataDir, bot.id);
+  response.json(db.setBotAvatarVersion(bot.id, null));
+  broadcast();
+});
 app.patch("/api/bots/:id", (request, response) => {
   // Autopilot is only ever switched here, by the owner: never by creating a teammate, a shared link, a routine or a tool call.
   const parsed = botInput.partial().extend({ autopilot: z.boolean().optional() }).safeParse(request.body);

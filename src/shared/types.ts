@@ -60,6 +60,8 @@ export interface Bot {
   name: string;
   emoji: string;
   mascot: MascotKind;
+  /** Set when the teammate has its own picture; part of its URL so browsers refetch on change. */
+  avatarVersion?: string | null;
   color: string;
   role: string;
   instructions: string;

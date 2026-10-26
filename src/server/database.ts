@@ -1079,6 +1079,7 @@ export class OpenBotDatabase {
     this.db.exec("UPDATE memories SET revision=lower(hex(randomblob(16))) WHERE revision IS NULL");
     this.addColumn("bots", "provider_instance_id TEXT");
     this.addColumn("bots", "mascot TEXT NOT NULL DEFAULT 'orbit'");
+    this.addColumn("bots", "avatar_version TEXT");
     this.addColumn("bots", "computer_enabled INTEGER NOT NULL DEFAULT 1");
     this.addColumn("bots", "browser_enabled INTEGER NOT NULL DEFAULT 1");
     this.addColumn("bots", "mac_access_enabled INTEGER NOT NULL DEFAULT 0");
@@ -1297,6 +1298,7 @@ export class OpenBotDatabase {
       id: String(row.id), ownerId: String(row.owner_id || DEFAULT_OWNER),
       providerInstanceId: row.provider_instance_id ? String(row.provider_instance_id) : null,
       name: String(row.name), emoji: String(row.emoji), mascot: String(row.mascot || "orbit") as MascotKind,
+      avatarVersion: row.avatar_version ? String(row.avatar_version) : null,
       color: String(row.color), role: String(row.role), instructions: String(row.instructions), model: String(row.model),
       status: this.botStatus(row), currentAction: row.current_action ? String(row.current_action) : null,
       computerEnabled: asBoolean(row.computer_enabled), browserEnabled: asBoolean(row.browser_enabled), autopilot: asBoolean(row.autopilot), aiMode: row.ai_mode === "automatic" ? "automatic" : "chosen", macAccessEnabled: asBoolean(row.mac_access_enabled),
@@ -1320,6 +1322,11 @@ export class OpenBotDatabase {
 
   listBots(includeRetired = false): Bot[] {
     return (this.db.prepare(this.botSelect(includeRetired ? "" : "WHERE b.retired_at IS NULL", "ORDER BY b.created_at ASC")).all() as Row[]).map((row) => this.botFromRow(row));
+  }
+
+  setBotAvatarVersion(id: string, version: string | null): Bot | null {
+    this.db.prepare("UPDATE bots SET avatar_version = ? WHERE id = ?").run(version, id);
+    return this.getBot(id);
   }
 
   getBot(id: string): Bot | null {
