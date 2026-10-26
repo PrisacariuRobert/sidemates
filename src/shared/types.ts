@@ -133,6 +133,8 @@ export interface Message {
   eventType: string | null;
   eventData: Record<string, string | number | boolean | null> | null;
   replyTo: MessageReplyPreview | null;
+  /** Set when this message belongs to a side thread about another message. The main chat leaves it out. */
+  sideRootId?: string | null;
   reactions: MessageReaction[];
   attachments: Attachment[];
 }
@@ -330,6 +332,8 @@ export interface RunReceipt {
 }
 
 export interface Run {
+  /** The side thread this run was started in, if any. Everything it writes stays in that thread. */
+  sideRootId?: string | null;
   /** Host-bound owner-requested review. Identity is a delivered revision, not a filename. */
   review?: {
     artifacts: Array<{ id: string; name: string; revision: number; sha256: string }>;

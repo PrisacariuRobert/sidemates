@@ -17,7 +17,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { createSpring, rubberband } from "./spring";
-import {
+import { MessagesSquare,
   Activity,
   ArrowRight,
   Boxes,
@@ -66,6 +66,7 @@ import { calendarMonthDays } from "../shared/calendar-grid";
 import { activeNowBots } from "../shared/presence";
 import { friendlyModelName } from "../shared/provider-config";
 import { ModelPicker, useProviderStatus } from "../components/ModelPicker";
+import { SideThread } from "./SideThread";
 import type {
   AppState,
   Bot,
@@ -792,6 +793,10 @@ export function Studio() {
   const [conversationQuery, setConversationQuery] = useState("");
   const [needsYouOnly, setNeedsYouOnly] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  // Side threads: messages sent inside one are kept out of the main chat and
+  // shown beside it; the root message only shows how many replies it has.
+  const [sideMessages, setSideMessages] = useState<AppState["messages"]>([]);
+  const [sideRootId, setSideRootId] = useState<string | null>(null);
   const [takeoverBot, setTakeoverBot] = useState<Bot | null>(null);
   const [signInPane, setSignInPane] = useState<string | null>(null);
   const [narrow, setNarrow] = useState(() => window.innerWidth < 1050);
@@ -871,7 +876,9 @@ export function Studio() {
     )
       .then((result) => {
         if (abort.signal.aborted || current !== requestNumber.current) return;
-        setState(result);
+        const inSideThread = result.messages.filter((message) => message.sideRootId);
+        setSideMessages(inSideThread);
+        setState(inSideThread.length ? { ...result, messages: result.messages.filter((message) => !message.sideRootId) } : result);
         if (firstLoad.current) {
           firstLoad.current = false;
           setRecipient(result.bots.find((bot) => bot.threadId === result.activeThreadId)?.id || "");
@@ -1192,6 +1199,31 @@ export function Studio() {
     [state?.messages],
   );
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const sideByRoot = useMemo(() => {
+    const map = new Map<string, AppState["messages"]>();
+    for (const message of sideMessages) if (message.sideRootId) map.set(message.sideRootId, [...(map.get(message.sideRootId) || []), message]);
+    return map;
+  }, [sideMessages]);
+  const sideRoot = sideRootId && state ? state.messages.find((message) => message.id === sideRootId) || null : null;
+  useEffect(() => { setSideRootId(null); }, [thread]);
+  useEffect(() => { if (contextOpen) setSideRootId(null); }, [contextOpen]);
+  const openSide = (messageId: string) => { setContextOpen(false); setSideRootId(messageId); };
+  const sideWorking = useMemo(() => {
+    if (!sideRoot || !state) return [] as string[];
+    const ids = new Set((sideByRoot.get(sideRoot.id) || []).map((message) => message.id));
+    return state.runs.filter((run) => run.triggerMessageId && ids.has(run.triggerMessageId) && ["queued", "running", "waiting_for_teammate"].includes(run.status)).map((run) => run.botName);
+  }, [sideRoot, sideByRoot, state]);
+  async function sendSide(root: AppState["messages"][number], body: string) {
+    const inThread = sideByRoot.get(root.id) || [];
+    const last = [...inThread].reverse().find((message) => message.kind === "text") || root;
+    const target = root.senderType === "bot" ? root.senderId : state?.bots.find((bot) => bot.threadId === root.threadId)?.id;
+    const response = await fetch("/api/messages", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId: root.threadId, body, replyToId: last.id, sideRootId: root.id, ...(target ? { targetBotIds: [target] } : {}), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, requestId: crypto.randomUUID() }),
+    });
+    if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error || "That did not send. Try again.");
+    setRefresh((n) => n + 1);
+  }
   const conversationBot =
     page === "chat"
       ? state?.bots.find((bot) => bot.threadId === thread)
@@ -2028,7 +2060,7 @@ export function Studio() {
   );
   return (
     <div
-      className={`studio-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${documentFile && page === "chat" ? "with-document" : ""} ${contextOpen && !narrow && page === "chat" ? "with-context" : ""} ${signInPane && !narrow && page === "chat" ? "with-sign-in" : ""}`}
+      className={`studio-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${documentFile && page === "chat" ? "with-document" : ""} ${(contextOpen || sideRoot) && !narrow && page === "chat" ? "with-context" : ""} ${sideRoot && !narrow && page === "chat" ? "with-thread" : ""} ${signInPane && !narrow && page === "chat" ? "with-sign-in" : ""}`}
     >
       <aside className="sidebar" aria-label={sidebarCollapsed ? "Collapsed conversation list" : "Conversation list"}>
         <a className="wordmark" href="/" title="Sidemates home">
@@ -2842,12 +2874,23 @@ export function Studio() {
                               messageId={message.id}
                               reactions={message.reactions || []}
                               onReply={() => setReplyTo({ id: message.id, senderName: message.senderName, body: message.body })}
+                              onThread={message.kind === "text" && !narrow ? () => openSide(message.id) : undefined}
                               onReacted={() => setRefresh((n) => n + 1)}
                               readAloud={message.senderType === "bot" ? message.body : undefined}
                               onRetry={retryTarget?.replyId === message.id ? () => void retryReply() : undefined}
                               onShare={message.senderType === "bot" && message.runId && !state.runs.some((run) => run.id === message.runId && ["queued", "running", "awaiting_approval", "waiting_for_teammate"].includes(run.status)) ? () => setSharing(message.id) : undefined}
                               onEdit={lastOwnMessageId === message.id && !sending ? () => pickStarter(message.body) : undefined}
                             />
+                            {(sideByRoot.get(message.id)?.length ?? 0) > 0 && !narrow && (() => {
+                              const replies = sideByRoot.get(message.id)!.filter((item) => item.kind === "text");
+                              const latest = replies.at(-1);
+                              return (
+                                <button type="button" className={`side-thread-link${sideRootId === message.id ? " open" : ""}`} onClick={() => openSide(message.id)}>
+                                  <MessagesSquare size={14} aria-hidden="true" />
+                                  {replies.length} {replies.length === 1 ? "reply" : "replies"} in thread{latest ? <time dateTime={latest.createdAt}> · {timeText(latest.createdAt)}</time> : null}
+                                </button>
+                              );
+                            })()}
                             {message.senderType === "bot" && message.runId
                               ? <DeliveryCard onOpenDocument={file => { setContextOpen(false); setDocumentFile(file); }} message={message} run={state.runs.find((run) => run.id === message.runId)} childRuns={state.runs.filter((run) => run.parentRunId === message.runId)} teammates={state.bots} visibleFiles={conversationFiles} />
                               : <>{message.attachments.map((file) => <DeliveredFile key={file.id} file={file} />)}</>}
@@ -2943,6 +2986,19 @@ export function Studio() {
             yoloMode={yoloMode}
             safetyBusy={modeBusy}
             onToggleSafety={() => void toggleMode()}
+          />
+        </aside>
+      )}
+      {sideRoot && !narrow && page === "chat" && state && (
+        <aside className="conversation-context side-thread-panel" aria-label="Thread">
+          <SideThread
+            key={sideRoot.id}
+            root={sideRoot}
+            replies={sideByRoot.get(sideRoot.id) || []}
+            working={sideWorking}
+            face={(message) => message.senderType === "user" ? <span className="side-thread-you" aria-hidden="true">You</span> : <Character name={message.senderName} color={message.senderColor || "#7064cf"} variant={message.senderMascot || "nova"} size={24} />}
+            onSend={(body) => sendSide(sideRoot, body)}
+            onClose={() => setSideRootId(null)}
           />
         </aside>
       )}

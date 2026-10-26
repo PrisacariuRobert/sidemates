@@ -2697,3 +2697,29 @@ mark.mention { background: none; color: inherit; font-weight: 600; padding: 0; }
 .avatar-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .avatar-upload:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
 .avatar-upload.disabled, .avatar-remove:disabled { opacity: .55; pointer-events: none; }
+
+/* Side threads: a conversation beside the chat about one message. */
+.studio-shell.with-thread { grid-template-columns: 270px minmax(0, 1fr) 380px; }
+.studio-shell.sidebar-collapsed.with-thread { grid-template-columns: var(--sidebar-width-collapsed) minmax(0, 1fr) 380px; }
+.side-thread-panel { display: flex; flex-direction: column; overflow: hidden; }
+.side-thread-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 20px 8px; display: flex; flex-direction: column; gap: 14px; }
+.side-thread-root { padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.side-thread-who { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.side-thread-who time { margin-left: auto; font-size: 11px; color: var(--muted); }
+.side-thread-you { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--surface-muted); font-size: 9px; font-weight: 700; color: var(--muted); }
+.side-thread-count { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+.side-thread-message { max-width: 94%; font-size: 14px; }
+.side-thread-message.mine { align-self: flex-end; padding: 9px 13px; border-radius: 16px; background: var(--surface-muted); }
+.side-thread-message .prose { font-size: 14px; line-height: 21px; }
+.side-thread-working { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; color: var(--muted); }
+.side-thread-composer { padding: 10px 16px 16px; border-top: 1px solid var(--line); }
+.side-thread-field { display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--surface); }
+.side-thread-field textarea { flex: 1; min-height: 24px; max-height: 140px; padding: 6px 0; border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 20px; resize: none; field-sizing: content; }
+.side-thread-field button { display: grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--strong, var(--ink)); color: var(--on-strong, var(--surface)); cursor: pointer; }
+.side-thread-field button:disabled { opacity: .35; cursor: default; }
+.side-thread-field:focus-within { border-color: var(--line-strong); }
+.side-thread-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 4px 10px; border: 0; border-radius: 999px; background: transparent; color: var(--accent, var(--ink)); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.side-thread-link:hover, .side-thread-link.open { background: var(--surface-muted); }
+.side-thread-link time { font-weight: 400; color: var(--muted); }
+.side-thread-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.side-thread-note { margin: 0; padding: 8px 12px; border-radius: 10px; background: var(--surface-muted); font-size: 12px; line-height: 1.5; color: var(--muted); }

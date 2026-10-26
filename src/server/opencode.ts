@@ -444,6 +444,9 @@ export class OpenCodeRunner {
         ? `Continue the existing task after the user's latest instruction or approval. Current request: ${run.prompt}`
         : `Take care of this new request for the user: ${run.prompt}\nOlder tasks are background only, not part of this request. Do not repeat their actions or append unrelated completion claims.`;
     request = `${currentMoment()}\n\n${request}`;
+    // A reply inside a side thread: give the teammate the message it is about.
+    const sideRootMessage = run.sideRootId ? this.options.db.getMessage(run.sideRootId) : null;
+    if (sideRootMessage) request += `\n\nThis request is a reply in a side thread about an earlier message from ${sideRootMessage.senderName}: “${sideRootMessage.body.replace(/\s+/g, " ").slice(0, 1500)}”. Answer about that message and keep the reply short and focused on it.`;
     const sharedProjects = this.options.db.listCodeProjects(bot.id).map((project) => {
       const access = project.access.find((item) => item.botId === bot.id)!;
       return `- ${project.name} (${project.id}): ${access.canWrite ? "edit" : "read-only"}${access.canRun ? ", checks enabled" : ""}`;

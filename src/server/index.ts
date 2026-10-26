@@ -1660,7 +1660,7 @@ const TESTER_FAULT_POINTS = ["after_verified_artifact", "before_dispatch"] as co
 const messageInput = z.object({  timeZone: z.string().max(100).optional(),
   expectedWorkKind: z.enum(["morning", "inbox", "meeting", "weekly"]).optional(),
   threadId: z.string().min(1), body: z.string().trim().max(20_000).default(""),
-  targetBotIds: z.array(z.string()).max(6).optional(), attachmentIds: z.array(z.string()).max(6).default([]), replyToId: z.string().uuid().nullable().optional(),
+  targetBotIds: z.array(z.string()).max(6).optional(), attachmentIds: z.array(z.string()).max(6).default([]), replyToId: z.string().uuid().nullable().optional(), sideRootId: z.string().uuid().nullable().optional(),
   requestId: z.string().trim().min(8).max(80).optional(),
 }).refine((value) => value.body.length > 0 || value.attachmentIds.length > 0, { message: "Write a message or attach a file." });
 
@@ -1833,6 +1833,10 @@ app.post("/api/messages", (request, response) => {
     const reply = db.getMessage(parsed.data.replyToId);
     if (!reply || reply.threadId !== thread.id) return response.status(400).json({ error: "That message is no longer available to reply to." });
   }
+  if (parsed.data.sideRootId) {
+    const root = db.getMessage(parsed.data.sideRootId);
+    if (!root || root.threadId !== thread.id || root.sideRootId || root.kind !== "text") return response.status(400).json({ error: "That message can no longer start a side thread." });
+  }
   // Durable admission: the replay check above already ran before any
   // eligibility validation. Stage the pending intent here — after all
   // read-only validation, before any message, attachment claim, routine or
@@ -1859,7 +1863,7 @@ app.post("/api/messages", (request, response) => {
     }
   }
   const body = parsed.data.body || `Shared ${parsed.data.attachmentIds.length} file${parsed.data.attachmentIds.length === 1 ? "" : "s"}.`;
-  const userMessage = db.addMessage({ threadId: thread.id, senderType: "user", senderId: null, body, replyToId: parsed.data.replyToId });
+  const userMessage = db.addMessage({ threadId: thread.id, senderType: "user", senderId: null, body, replyToId: parsed.data.replyToId, sideRootId: parsed.data.sideRootId ?? null });
   const attachments = db.claimAttachments(parsed.data.attachmentIds, userMessage.id, thread.id);
   const attachmentBlocks = attachments.map((attachment) => {
     const file = db.attachmentFile(attachment.id)!;
@@ -1929,6 +1933,7 @@ app.post("/api/messages", (request, response) => {
       expectedWorkKind: parsed.data.expectedWorkKind,
       attachmentIds: attachments.map((attachment) => attachment.id),
       afterRunId: leaderRun?.id ?? null,
+      sideRootId: parsed.data.sideRootId ?? null,
     });
     if (leader) db.addActivity({ runId: run.id, botId: bot.id, kind: "status", label: `Waiting for ${leader.name}’s answer`, detail: "Starts as soon as it’s ready, to build on it." });
     created.set(bot.id, run);
