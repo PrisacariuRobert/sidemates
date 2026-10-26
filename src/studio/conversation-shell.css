@@ -863,6 +863,12 @@ header.topbar .topbar-center { display: flex; align-items: center; flex-directio
 .prose {
   line-height: 22px; color: var(--ink); font-size: 15px; letter-spacing: -.12px; overflow-wrap: anywhere;
 }
+/* Tables in chat: columns size to their words, never to single letters.
+ * Anywhere-wrapping stays for long links, but not inside table cells. */
+.prose .markdown-table { max-width: 100%; overflow-x: auto; margin: 12px 0; }
+.prose .markdown-table table { display: table; width: 100%; margin: 0; font-size: 14px; line-height: 1.5; }
+.prose .markdown-table :is(th, td) { min-width: 5.5em; overflow-wrap: break-word; word-break: normal; vertical-align: top; }
+.prose .markdown-table th { font-weight: 600; background: var(--surface-muted); }
 .message-author {
   position: absolute; left: 0; top: 16px; margin: 0;
 }
