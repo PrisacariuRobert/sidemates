@@ -19,7 +19,9 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
+import { realpathSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
+import { connectTools } from "./opencode-v2-tools.mjs";
 
 const argv = process.argv.slice(2);
 const children = new Set();
@@ -28,9 +30,11 @@ const auth = { authorization: "" };
 
 const write = (value) => process.stdout.write(`${typeof value === "string" ? value : JSON.stringify(value)}\n`);
 const stopAll = (signal = "SIGTERM") => { for (const child of children) { try { child.kill(signal); } catch { /* gone */ } } };
+// How to ask the server to stop the running session; set once the server's generation is known.
+let abortRemote = () => sessionId && base ? fetch(`${base}/session/${sessionId}/abort`, { method: "POST", headers: auth, signal: AbortSignal.timeout(1_500) }).catch(() => {}) : Promise.resolve();
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, () => {
   exiting = true;
-  const abort = sessionId && base ? fetch(`${base}/session/${sessionId}/abort`, { method: "POST", headers: auth, signal: AbortSignal.timeout(1_500) }).catch(() => {}) : Promise.resolve();
+  const abort = abortRemote();
   void abort.finally(() => { stopAll(signal); process.exit(143); });
   setTimeout(() => { stopAll("SIGKILL"); process.exit(143); }, 3_000).unref();
 });
@@ -42,7 +46,7 @@ function parse(args) {
   const rest = args.slice(1);
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
-    if (arg === "--auto") out.auto = true;
+    if (arg === "--auto" || arg === "--standalone") { if (arg === "--auto") out.auto = true; }
     else if (arg === "--format") { if (rest[++i] !== "json") return null; }
     else if (["--model", "--dir", "--agent", "--session", "--title", "--file"].includes(arg)) {
       const value = rest[++i];
@@ -52,7 +56,9 @@ function parse(args) {
     else if (i === rest.length - 1) out.prompt = arg;
     else return null;
   }
-  if (!out.prompt || !out.model || !out.model.includes("/") || !out.dir) return null;
+  if (!out.prompt || !out.model || !out.model.includes("/")) return null;
+  // OpenCode 2.x has no --dir: the working folder is the project.
+  out.dir ||= process.cwd();
   return out;
 }
 
@@ -162,9 +168,26 @@ async function done() {
   process.exit(hadError ? 1 : 0);
 }
 
+/** The event stream closed. After a prompt was sent that means the work is over;
+ * before that nothing ran, so say so instead of exiting as if it had succeeded. */
+let promptSent = false;
+function ended() {
+  if (promptSent) return done();
+  if (finished) return;
+  finished = true;
+  // Nothing was sent, so there is nothing to reconcile: report it and stop.
+  write({ type: "error", timestamp: Date.now(), sessionID: sessionId, error: { name: "UnknownError", data: { message: "OpenCode stopped before the task started." } } });
+  stopAll();
+  process.exit(1);
+}
+
 async function subscribe(signal, onEvent) {
   const response = await fetch(`${base}/event`, { headers: auth, signal });
   if (!response.ok || !response.body) throw new Error("The OpenCode event stream did not open.");
+  // A newer OpenCode can answer this address with its web app instead of an
+  // event stream. That is not a stream: reading it would end at once and look
+  // like a finished task with no answer. Only a real stream counts.
+  if (!/text\/event-stream/i.test(response.headers.get("content-type") || "")) throw new Error("The OpenCode server did not offer the expected event stream.");
   const decoder = new TextDecoder();
   let buffer = "";
   (async () => {
@@ -178,8 +201,8 @@ async function subscribe(signal, onEvent) {
           try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip a malformed event */ }
         }
       }
-      if (!finished && !exiting) void done();
-    } catch { if (!finished && !exiting) void done(); }
+      if (!finished && !exiting) void ended();
+    } catch { if (!finished && !exiting) void ended(); }
   })();
 }
 
@@ -190,14 +213,113 @@ function fallBack(stream) {
   plainRun();
 }
 
+/** OpenCode 2.x: a different server API (under /api, new event names, the
+ * password in OPENCODE_PASSWORD). `opencode run --server` still does the work and
+ * prints the usual result lines, so those are passed through untouched. The only
+ * thing added here is live text: the event stream's text updates are turned into
+ * the display-only lines Sidemates already shows. */
+async function isOpenCode2() {
+  try {
+    const response = await fetch(`${base}/api/info`, { headers: auth, signal: AbortSignal.timeout(4_000) });
+    if (!response.ok || !/json/i.test(response.headers.get("content-type") || "")) return false;
+    return typeof (await response.json())?.version === "string";
+  } catch { return false; }
+}
+
+/** Event stream (2.x names) -> the shape the live-text collector reads. */
+function liveFromV2(event) {
+  const data = event?.data || {};
+  const message = data.assistantMessageID;
+  if (!message || (data.sessionID && sessionId && data.sessionID !== sessionId)) return null;
+  const partID = `${message}:text:${data.ordinal ?? 0}`;
+  if (event.type === "session.text.started") return { type: "message.part.updated", properties: { part: { id: partID, messageID: message, type: "text", text: "" } } };
+  if (event.type === "session.text.delta" && typeof data.delta === "string") return { type: "message.part.delta", properties: { partID, messageID: message, field: "text", delta: data.delta } };
+  if (event.type === "session.text.ended" && typeof data.text === "string") return { type: "message.part.updated", properties: { part: { id: partID, messageID: message, type: "text", text: data.text } } };
+  return null;
+}
+
+// Steps the run's own output already reported usage for, and every step the event stream says ended.
+const reportedSteps = new Set(), endedSteps = new Map();
+
+async function watchV2(signal) {
+  try {
+    const response = await fetch(`${base}/api/event`, { headers: { ...auth, accept: "text/event-stream" }, signal });
+    // Live text is a bonus. If the stream is not a real one, the run goes on without it.
+    if (!response.ok || !response.body || !/text\/event-stream/i.test(response.headers.get("content-type") || "")) return;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        try {
+          const event = JSON.parse(line.slice(5).trim());
+          if (!sessionId && event?.data?.sessionID && ["session.created", "session.execution.started"].includes(event.type)) sessionId = event.data.sessionID;
+          if (event?.type === "session.step.ended" && event.data?.assistantMessageID && (!sessionId || event.data.sessionID === sessionId)) endedSteps.set(event.data.assistantMessageID, event.data);
+          const live = liveFromV2(event);
+          if (live) write({ type: "openbot.opencode_event", event: live });
+        } catch { /* skip an unreadable event */ }
+      }
+    }
+  } catch { /* the stream ended or was stopped */ }
+}
+
+async function runV2(password, directory, agentName) {
+  try { await connectTools(api, directory, { agent: agentName, stopped: () => exiting }); }
+  catch {
+    write({ type: "error", timestamp: Date.now(), sessionID: sessionId, error: { name: "UnknownError", data: { message: "Sidemates' tools could not be started for this OpenCode run." } } });
+    stopAll();
+    return process.exit(1);
+  }
+  abortRemote = () => sessionId ? fetch(`${base}/api/session/${sessionId}/interrupt`, { method: "POST", headers: auth, signal: AbortSignal.timeout(1_500) }).catch(() => {}) : Promise.resolve();
+  const stream = new AbortController();
+  void watchV2(stream.signal);
+  // The same arguments the plain run would get, pointed at this private server.
+  const args = ["run", "--server", base, ...argv.slice(1).filter((arg) => arg !== "--standalone")];
+  const child = spawn("opencode", args, { env: { ...process.env, OPENCODE_PASSWORD: password }, stdio: ["ignore", "pipe", "inherit"] });
+  children.add(child);
+  let buffer = "";
+  child.stdout.on("data", (chunk) => {
+    buffer += String(chunk);
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line);
+        if (!sessionId && event?.sessionID) sessionId = event.sessionID;
+        if (event?.type === "step_finish" && event.part?.messageID) reportedSteps.add(event.part.messageID);
+      } catch { /* not a result line */ }
+      write(line);
+    }
+  });
+  child.on("error", (error) => { process.stderr.write(`${error.message}\n`); stream.abort(); stopAll(); process.exit(1); });
+  child.on("close", (code, signal) => {
+    children.delete(child);
+    if (buffer.trim()) write(buffer);
+    // Let the last live events and the server shut down cleanly.
+    setTimeout(() => {
+      stream.abort();
+      // 2.x leaves the closing step out of its own output, so its usage would read as zero.
+      for (const [messageID, step] of endedSteps) if (!reportedSteps.has(messageID)) write({ type: "step_finish", timestamp: Date.now(), sessionID: step.sessionID, part: { id: `${messageID}:finish`, sessionID: step.sessionID, messageID, type: "step-finish", reason: step.finish, cost: step.cost, tokens: step.tokens } });
+      stopAll();
+      process.exit(exiting ? 143 : signal ? 1 : code ?? 1);
+    }, 300);
+  });
+}
+
 async function main() {
   const options = parse(argv);
   if (!options) return plainRun();
   const password = randomUUID();
-  const env = { ...process.env, OPENCODE_SERVER_PASSWORD: password };
+  // 1.x reads OPENCODE_SERVER_PASSWORD; 2.x reads OPENCODE_PASSWORD (and prefers it).
+  const env = { ...process.env, OPENCODE_SERVER_PASSWORD: password, OPENCODE_PASSWORD: password };
   base = await startServer(env);
   if (!base || exiting) return plainRun();
   auth.authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+  if (await isOpenCode2()) return runV2(password, (() => { try { return realpathSync(options.dir); } catch { return options.dir; } })(), options.agent || "openbot");
   const directory = `?directory=${encodeURIComponent(options.dir)}`;
   abortSession = () => void api(`/session/${sessionId}/abort${directory}`, {}).catch(() => {});
   const stream = new AbortController();
@@ -264,8 +386,10 @@ async function main() {
     }
   };
   try {
-    await subscribe(stream.signal, onEvent);
-    // Nothing has been sent yet: if setting up fails, run the plain way.
+    // Nothing has been sent yet, so an unfamiliar server (a newer OpenCode) just
+    // means: run the plain way, which every version supports.
+    try { await subscribe(stream.signal, onEvent); } catch { return fallBack(stream); }
+    // If setting up fails, run the plain way too.
     try {
       if (options.session) {
         sessionId = options.session;
@@ -278,7 +402,7 @@ async function main() {
       { type: "text", text: options.prompt },
       ...options.files.map((file) => { const path = resolve(options.dir, file); return { type: "file", mime: mimeFor(path), filename: basename(path), url: `file://${path}` }; }),
     ];
-    prompted = true;
+    prompted = true; promptSent = true;
     try {
       await api(`/session/${sessionId}/prompt_async${directory}`, { model: { providerID: options.model.slice(0, slash), modelID: options.model.slice(slash + 1) }, ...(options.agent ? { agent: options.agent } : {}), parts });
     } catch (error) {

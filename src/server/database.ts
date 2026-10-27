@@ -1079,6 +1079,9 @@ export class OpenBotDatabase {
     this.db.exec("UPDATE memories SET revision=lower(hex(randomblob(16))) WHERE revision IS NULL");
     this.addColumn("bots", "provider_instance_id TEXT");
     this.addColumn("bots", "mascot TEXT NOT NULL DEFAULT 'orbit'");
+    this.addColumn("bots", "avatar_version TEXT");
+    this.addColumn("messages", "side_root_id TEXT");
+    this.addColumn("runs", "side_root_id TEXT");
     this.addColumn("bots", "computer_enabled INTEGER NOT NULL DEFAULT 1");
     this.addColumn("bots", "browser_enabled INTEGER NOT NULL DEFAULT 1");
     this.addColumn("bots", "mac_access_enabled INTEGER NOT NULL DEFAULT 0");
@@ -1297,6 +1300,7 @@ export class OpenBotDatabase {
       id: String(row.id), ownerId: String(row.owner_id || DEFAULT_OWNER),
       providerInstanceId: row.provider_instance_id ? String(row.provider_instance_id) : null,
       name: String(row.name), emoji: String(row.emoji), mascot: String(row.mascot || "orbit") as MascotKind,
+      avatarVersion: row.avatar_version ? String(row.avatar_version) : null,
       color: String(row.color), role: String(row.role), instructions: String(row.instructions), model: String(row.model),
       status: this.botStatus(row), currentAction: row.current_action ? String(row.current_action) : null,
       computerEnabled: asBoolean(row.computer_enabled), browserEnabled: asBoolean(row.browser_enabled), autopilot: asBoolean(row.autopilot), aiMode: row.ai_mode === "automatic" ? "automatic" : "chosen", macAccessEnabled: asBoolean(row.mac_access_enabled),
@@ -1320,6 +1324,11 @@ export class OpenBotDatabase {
 
   listBots(includeRetired = false): Bot[] {
     return (this.db.prepare(this.botSelect(includeRetired ? "" : "WHERE b.retired_at IS NULL", "ORDER BY b.created_at ASC")).all() as Row[]).map((row) => this.botFromRow(row));
+  }
+
+  setBotAvatarVersion(id: string, version: string | null): Bot | null {
+    this.db.prepare("UPDATE bots SET avatar_version = ? WHERE id = ?").run(version, id);
+    return this.getBot(id);
   }
 
   getBot(id: string): Bot | null {
@@ -1754,15 +1763,28 @@ export class OpenBotDatabase {
     return rows.map((row) => this.getBot(String(row.bot_id))).filter((bot): bot is Bot => Boolean(bot));
   }
 
-  addMessage(input: { threadId: string; senderType: Message["senderType"]; senderId: string | null; body: string; runId?: string | null; replyToId?: string | null; kind?: Message["kind"]; eventType?: string | null; eventData?: Record<string, string | number | boolean | null> }): Message {
+  addMessage(input: { threadId: string; senderType: Message["senderType"]; senderId: string | null; body: string; runId?: string | null; replyToId?: string | null; sideRootId?: string | null; kind?: Message["kind"]; eventType?: string | null; eventData?: Record<string, string | number | boolean | null> }): Message {
     const id = randomUUID();
     const createdAt = now();
     const reply = input.replyToId ? this.getMessage(input.replyToId) : null;
     if (input.replyToId && (!reply || reply.threadId !== input.threadId)) throw new Error("That message is no longer available to reply to.");
-    this.db.prepare("INSERT INTO messages (id,thread_id,sender_type,sender_id,body,created_at,run_id,reply_to_id,kind,event_type,event_data) VALUES (?,?,?,?,?,?,?,?,?,?,?)").run(
+    // A message belongs to a side thread when it is sent into one, replies to a
+    // message that does, or comes from a run that started in one. Teammate
+    // answers and their status lines follow the question without extra wiring.
+    let sideRootId: string | null = input.sideRootId ?? reply?.sideRootId ?? null;
+    if (input.sideRootId) {
+      const root = this.getMessage(input.sideRootId);
+      if (!root || root.threadId !== input.threadId || root.sideRootId || root.kind !== "text") throw new Error("That message can no longer start a side thread.");
+    }
+    if (!sideRootId && input.runId) {
+      const row = this.db.prepare("SELECT side_root_id FROM runs WHERE id=? AND thread_id=?").get(input.runId, input.threadId) as Row | undefined;
+      if (row?.side_root_id) sideRootId = String(row.side_root_id);
+    }
+    this.db.prepare("INSERT INTO messages (id,thread_id,sender_type,sender_id,body,created_at,run_id,reply_to_id,kind,event_type,event_data,side_root_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(
       id, input.threadId, input.senderType, input.senderId, input.body, createdAt, input.runId ?? null, reply?.id || null,
       input.kind ?? "text", input.kind === "event" ? input.eventType ?? "note" : null,
       input.kind === "event" && input.eventData ? JSON.stringify(input.eventData) : null,
+      sideRootId,
     );
     this.db.prepare("UPDATE threads SET updated_at=? WHERE id=?").run(createdAt, input.threadId);
     return this.getMessage(id)!;
@@ -1782,6 +1804,7 @@ export class OpenBotDatabase {
       kind: (row.kind === "event" ? "event" : "text") as Message["kind"],
       eventType: row.event_type ? String(row.event_type) : null,
       eventData: row.event_data ? (() => { try { const parsed = JSON.parse(String(row.event_data)); return typeof parsed === "object" && parsed !== null ? parsed as Record<string, string | number | boolean | null> : null; } catch { return null; } })() : null,
+      sideRootId: row.side_root_id ? String(row.side_root_id) : null,
       replyTo: row.reply_id ? {
         id: String(row.reply_id),
         senderName: row.reply_sender_type === "user" ? "You" : row.reply_sender_type === "system" ? "Sidemates" : String(row.reply_bot_name || "Teammate"),
@@ -2142,7 +2165,7 @@ export class OpenBotDatabase {
     return this.listMessageAttachments(messageId);
   }
 
-  createRun(input: { threadId: string; botId: string; prompt: string; status: RunStatus; approvalReason?: string | null; parentRunId?: string | null; steeredFromRunId?: string | null; triggerMessageId?: string | null; routineId?: string | null; automationEventId?: string | null; attachmentIds?: string[]; expectedWorkKind?: Run["expectedWorkKind"]; afterRunId?: string | null }): Run {
+  createRun(input: { threadId: string; botId: string; prompt: string; status: RunStatus; approvalReason?: string | null; parentRunId?: string | null; steeredFromRunId?: string | null; sideRootId?: string | null; triggerMessageId?: string | null; routineId?: string | null; automationEventId?: string | null; attachmentIds?: string[]; expectedWorkKind?: Run["expectedWorkKind"]; afterRunId?: string | null }): Run {
     if (this.getBot(input.botId)?.retiredAt) throw new Error("This teammate is retired. Restore them before starting new work.");
     if (input.routineId) {
       const routine = this.getRoutine(input.routineId);
@@ -2157,6 +2180,13 @@ export class OpenBotDatabase {
       tracked ? taskGoal(input.prompt) : null, tracked ? "A finished, reviewable result in this conversation" : null, input.approvalReason ?? null,
       input.status === "awaiting_approval" ? "waiting" : "queued", JSON.stringify(tracked ? startingTaskSteps() : []), id,
     );
+    // Work started inside a side thread stays there: started from a message in
+    // one, from a message that belongs to one, or as help for a run that does.
+    const sideRootId = input.sideRootId
+      ?? (input.triggerMessageId ? this.getMessage(input.triggerMessageId)?.sideRootId : null)
+      ?? (input.parentRunId ? this.getRun(input.parentRunId)?.sideRootId : null)
+      ?? null;
+    if (sideRootId) this.db.prepare("UPDATE runs SET side_root_id=? WHERE id=?").run(sideRootId, id);
     const previous = input.steeredFromRunId ? this.getRun(input.steeredFromRunId) : null;
     this.db.prepare("UPDATE runs SET expected_work_kind=?,completion_repair_count=? WHERE id=?").run(input.expectedWorkKind ?? previous?.expectedWorkKind ?? null, previous?.completionRepairCount || 0, id);
     if (input.status === "awaiting_approval" && input.approvalReason) {
@@ -2214,7 +2244,7 @@ export class OpenBotDatabase {
       id, threadId: String(row.thread_id), botId: String(row.bot_id), botName: String(row.bot_name), botEmoji: String(row.bot_emoji),
       review: this.extensionRecord<NonNullable<Run["review"]>>("run-review", id),
       botMascot: String(row.bot_mascot || "orbit") as MascotKind, botColor: String(row.bot_color), parentRunId: row.parent_run_id ? String(row.parent_run_id) : null,
-      steeredFromRunId: row.steered_from_run_id ? String(row.steered_from_run_id) : null, triggerMessageId: row.trigger_message_id ? String(row.trigger_message_id) : null, routineId: row.routine_id ? String(row.routine_id) : null,
+      steeredFromRunId: row.steered_from_run_id ? String(row.steered_from_run_id) : null, triggerMessageId: row.trigger_message_id ? String(row.trigger_message_id) : null, sideRootId: row.side_root_id ? String(row.side_root_id) : null, routineId: row.routine_id ? String(row.routine_id) : null,
       automationEventId: row.automation_event_id ? String(row.automation_event_id) : null,
       outcome: row.outcome === "delivered" || row.outcome === "blocked" ? row.outcome : null,
       attemptCount: Number(row.attempt_count || 0), recoveredAt: row.recovered_at ? String(row.recovered_at) : null,

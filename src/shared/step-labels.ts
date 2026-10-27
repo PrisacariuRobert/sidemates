@@ -22,6 +22,8 @@ export const TOOL_STEP_LABELS: Record<string, string> = {
   work_collect: "Gathering your briefing sources", work_report: "Preparing your source-linked result",
   spreadsheet_export: "Creating your workbook",
   document_export: "Creating your document",
+  video_fetch: "Saving the video",
+  video_render: "Making your video",
   web_search: "Searching the web", web_read: "Reading the page",
   spreadsheet_inspect: "Checking your saved workbook", conversation_search: "Looking back in this conversation",
   table_summary: "Calculating your table totals",

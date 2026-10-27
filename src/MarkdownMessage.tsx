@@ -41,5 +41,6 @@ export function MarkdownMessage({ body, attachments = [] }: { body: string; atta
     li: ({ children }) => <li>{highlightMentions(children)}</li>,
     a: ({ href, children }) => <a href={attachmentHref(href)} target="_blank" rel="noreferrer">{children}</a>,
     pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+    table: ({ children }) => <div className="markdown-table"><table>{children}</table></div>,
   }}>{body}</ReactMarkdown>;
 }

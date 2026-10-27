@@ -138,6 +138,11 @@ test("reads Claude Code stream events without a provider-specific UI path", () =
   assert.deepEqual(toolActivity(event), { label: "Saving your file", detail: null, kind: "tool" });
 });
 
+test("OpenCode 2.x's openbot_<tool> names get the same friendly labels as the plain names", () => {
+  assert.deepEqual(toolActivity({ part: { tool: "openbot_workspace_write", state: {} } }), toolActivity({ part: { tool: "workspace_write", state: {} } }));
+  assert.notEqual(toolActivity({ part: { tool: "openbot_workspace_write", state: {} } })?.label, "Working on it");
+});
+
 test("turns internal tool names into friendly progress updates", () => {
   assert.deepEqual(toolActivity({ part: { tool: "task_plan", state: {} } }), {
     label: "Setting the finish line", detail: null, kind: "tool",

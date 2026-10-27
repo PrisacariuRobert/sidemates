@@ -131,6 +131,23 @@ function authHas(auth: string, pattern: RegExp) {
   return pattern.test(stripAnsi(auth));
 }
 
+/** Which accounts `opencode auth list` says are stored. OpenCode has worded
+ * this list in more than one way ("OpenCode Go  api" before, "OpenCode Console
+ * API key  stored" now), so match the provider name followed by any key or
+ * sign-in type rather than one exact line. */
+export function openCodeSignIns(output: string) {
+  const type = String.raw`[ \t]+(?:api(?:[ \t]+key)?|oauth|wellknown|key)\b`;
+  const has = (name: string) => authHas(output, new RegExp(`(?<![A-Za-z])${name}${type}`, "i"));
+  return {
+    opencode: has("OpenCode(?: Go| Zen| Console)?"),
+    openai: has("OpenAI"),
+    copilot: has("GitHub Copilot"),
+    gitlab: has("GitLab"),
+    xai: has("xAI"),
+    google: has("Google"),
+  };
+}
+
 function connectedInstance(db: OpenBotDatabase, input: Parameters<OpenBotDatabase["upsertProvider"]>[0]) {
   const current = input.id ? db.getProvider(input.id) : null;
   if (current && current.name === input.name && current.provider === input.provider && current.authMode === input.authMode && current.runtime === input.runtime) return current;
@@ -166,12 +183,13 @@ async function inspectProviderStatus(db: OpenBotDatabase, loginAttempts: Provide
     claudeInstalled ? check("claude", ["auth", "status"]) : Promise.resolve({ code: 1, stdout: "", stderr: "" }),
   ]);
   let allModels = modelLines(models.stdout);
-  const openCodeConnected = auth.code === 0 && authHas(auth.stdout, /OpenCode(?: Go| Zen)?\s+api/i);
-  const openAIConnected = auth.code === 0 && authHas(auth.stdout, /OpenAI\s+(?:api|oauth)/i);
-  const copilotConnected = auth.code === 0 && authHas(auth.stdout, /GitHub Copilot\s+(?:api|oauth)/i);
-  const gitlabConnected = auth.code === 0 && authHas(auth.stdout, /GitLab\s+(?:api|oauth)/i);
-  const xaiConnected = auth.code === 0 && authHas(auth.stdout, /xAI\s+(?:api|oauth)/i);
-  const googleConnected = auth.code === 0 && authHas(auth.stdout, /Google\s+api/i);
+  const signedIn = auth.code === 0 ? openCodeSignIns(auth.stdout) : null;
+  const openCodeConnected = Boolean(signedIn?.opencode);
+  const openAIConnected = Boolean(signedIn?.openai);
+  const copilotConnected = Boolean(signedIn?.copilot);
+  const gitlabConnected = Boolean(signedIn?.gitlab);
+  const xaiConnected = Boolean(signedIn?.xai);
+  const googleConnected = Boolean(signedIn?.google);
   let claudeConnected = false;
   try { claudeConnected = Boolean(JSON.parse(claudeAuth.stdout || "{}").loggedIn); } catch { claudeConnected = /logged.?in\D+true/i.test(claudeAuth.stdout); }
 

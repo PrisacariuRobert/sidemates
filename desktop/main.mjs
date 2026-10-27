@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, dialog, globalShortcut, nativeImage, shell } from "electron";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync } from "node:fs";
 import http from "node:http";
@@ -60,9 +60,14 @@ function main() {
       return;
     }
     createWindow();
+    if (!process.env.OPENBOT_QA_SCREENSHOT) setupTrayAndShortcut();
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+  });
+
+  app.on("will-quit", () => {
+    try { globalShortcut.unregisterAll(); } catch { /* Shortcut was never registered. */ }
   });
 
   app.on("window-all-closed", () => {
@@ -116,6 +121,73 @@ function main() {
       };
       attempt();
     });
+  }
+
+  function focusMainWindow() {
+    const [window] = BrowserWindow.getAllWindows().filter((item) => !item.isDestroyed() && item.title !== "Sidemates quick note");
+    if (window) {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+      return window;
+    }
+    return createWindow();
+  }
+
+  function openQuickNote() {
+    const existing = BrowserWindow.getAllWindows().find((item) => !item.isDestroyed() && item.title === "Sidemates quick note");
+    if (existing) {
+      existing.show();
+      existing.focus();
+      return existing;
+    }
+    const note = new BrowserWindow({
+      width: 440,
+      height: 340,
+      minWidth: 360,
+      minHeight: 240,
+      title: "Sidemates quick note",
+      backgroundColor: "#f5f5f7",
+      autoHideMenuBar: true,
+      alwaysOnTop: true,
+      show: false,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    note.once("ready-to-show", () => note.show());
+    installNavigationGuards(note.webContents, BASE, (url) => shell.openExternal(url), () => {});
+    // Same studio, same drafts: typing here lands in the shared backend.
+    void note.loadURL(BASE);
+    return note;
+  }
+
+  function setupTrayAndShortcut() {
+    try {
+      const candidates = [
+        path.join(import.meta.dirname, "build", "icon.png"),
+        path.join(process.resourcesPath || "", "build", "icon.png"),
+      ];
+      const iconPath = candidates.find((item) => existsSync(item));
+      const image = iconPath ? nativeImage.createFromPath(iconPath).resize({ width: 18, height: 18 }) : nativeImage.createEmpty();
+      // Empty icons make an invisible tray on some platforms; skip instead.
+      if (image.isEmpty() && !iconPath) return;
+      const tray = new Tray(image);
+      tray.setToolTip("Sidemates — your AI team");
+      const menu = Menu.buildFromTemplate([
+        { label: "Open Sidemates", click: () => { focusMainWindow(); } },
+        { label: "Quick note…", accelerator: "CommandOrControl+Shift+J", click: () => { openQuickNote(); } },
+        { type: "separator" },
+        { label: "Quit Sidemates", role: "quit" },
+      ]);
+      tray.setContextMenu(menu);
+      tray.on("click", () => { focusMainWindow(); });
+      // Global hotkey mirrors the tray action; failures (conflicts) stay silent.
+      try {
+        globalShortcut.register("CommandOrControl+Shift+J", () => { focusMainWindow(); });
+      } catch { /* Another app owns the shortcut. Tray menu still works. */ }
+      if (process.platform === "darwin") app.dock?.show?.();
+    } catch {
+      /* Tray is convenience only; the studio works without it. */
+    }
   }
 
   function createWindow() {

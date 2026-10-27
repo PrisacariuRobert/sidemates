@@ -116,6 +116,9 @@ import { execFile } from "node:child_process";
 import { DiscordChannel } from "./discord-channel.js";
 import { weeklyRecap } from "../shared/weekly-recap.js";
 import { exportDocument } from "./document-export.js";
+import { fetchVideo } from "./video-fetch.js";
+import { readAvatar, removeAvatar, saveAvatar } from "./avatars.js";
+import { renderVideo } from "./video-render.js";
 import { webRead, webResearchEnabled, webSearch } from "./web-research.js";
 import { AwakeGuard } from "./awake-guard.js";
 import { syncedFolderProvider, syncedFolderWarning } from "./synced-folder.js";
@@ -974,6 +977,7 @@ app.get("/api/readiness", async (_request, response) => {
     cliAvailable: status.cliAvailable,
     compatibility: compatibility.compatibility,
     detectedVersion: compatibility.detectedVersion,
+    compatibilityDetail: compatibility.detail,
     connectedNames: connected.map((instance) => instance.name),
     readyTeammates,
     totalTeammates: db.listBots().length,
@@ -1657,7 +1661,7 @@ const TESTER_FAULT_POINTS = ["after_verified_artifact", "before_dispatch"] as co
 const messageInput = z.object({  timeZone: z.string().max(100).optional(),
   expectedWorkKind: z.enum(["morning", "inbox", "meeting", "weekly"]).optional(),
   threadId: z.string().min(1), body: z.string().trim().max(20_000).default(""),
-  targetBotIds: z.array(z.string()).max(6).optional(), attachmentIds: z.array(z.string()).max(6).default([]), replyToId: z.string().uuid().nullable().optional(),
+  targetBotIds: z.array(z.string()).max(6).optional(), attachmentIds: z.array(z.string()).max(6).default([]), replyToId: z.string().uuid().nullable().optional(), sideRootId: z.string().uuid().nullable().optional(),
   requestId: z.string().trim().min(8).max(80).optional(),
 }).refine((value) => value.body.length > 0 || value.attachmentIds.length > 0, { message: "Write a message or attach a file." });
 
@@ -1830,6 +1834,10 @@ app.post("/api/messages", (request, response) => {
     const reply = db.getMessage(parsed.data.replyToId);
     if (!reply || reply.threadId !== thread.id) return response.status(400).json({ error: "That message is no longer available to reply to." });
   }
+  if (parsed.data.sideRootId) {
+    const root = db.getMessage(parsed.data.sideRootId);
+    if (!root || root.threadId !== thread.id || root.sideRootId || root.kind !== "text") return response.status(400).json({ error: "That message can no longer start a side thread." });
+  }
   // Durable admission: the replay check above already ran before any
   // eligibility validation. Stage the pending intent here — after all
   // read-only validation, before any message, attachment claim, routine or
@@ -1856,7 +1864,7 @@ app.post("/api/messages", (request, response) => {
     }
   }
   const body = parsed.data.body || `Shared ${parsed.data.attachmentIds.length} file${parsed.data.attachmentIds.length === 1 ? "" : "s"}.`;
-  const userMessage = db.addMessage({ threadId: thread.id, senderType: "user", senderId: null, body, replyToId: parsed.data.replyToId });
+  const userMessage = db.addMessage({ threadId: thread.id, senderType: "user", senderId: null, body, replyToId: parsed.data.replyToId, sideRootId: parsed.data.sideRootId ?? null });
   const attachments = db.claimAttachments(parsed.data.attachmentIds, userMessage.id, thread.id);
   const attachmentBlocks = attachments.map((attachment) => {
     const file = db.attachmentFile(attachment.id)!;
@@ -1926,6 +1934,7 @@ app.post("/api/messages", (request, response) => {
       expectedWorkKind: parsed.data.expectedWorkKind,
       attachmentIds: attachments.map((attachment) => attachment.id),
       afterRunId: leaderRun?.id ?? null,
+      sideRootId: parsed.data.sideRootId ?? null,
     });
     if (leader) db.addActivity({ runId: run.id, botId: bot.id, kind: "status", label: `Waiting for ${leader.name}’s answer`, detail: "Starts as soon as it’s ready, to build on it." });
     created.set(bot.id, run);
@@ -3250,6 +3259,33 @@ app.post("/api/bots/import", (request, response) => {
   }
 });
 
+app.post("/api/bots/:id/avatar", express.raw({ type: "application/octet-stream", limit: "7mb" }), async (request, response) => {
+  const bot = db.getBot(request.params.id);
+  if (!bot) return response.status(404).json({ error: "Teammate not found." });
+  if (!Buffer.isBuffer(request.body)) return response.status(400).json({ error: "Choose a picture to use." });
+  try {
+    const version = await saveAvatar(db.dataDir, bot.id, request.body);
+    const updated = db.setBotAvatarVersion(bot.id, version);
+    response.json(updated);
+    broadcast();
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : "That picture could not be used." });
+  }
+});
+app.get("/api/bots/:id/avatar", (request, response) => {
+  const bot = db.getBot(request.params.id);
+  const bytes = bot?.avatarVersion ? readAvatar(db.dataDir, bot.id) : null;
+  if (!bot || !bytes) return response.status(404).end();
+  // The URL carries the version, so a changed picture is a new URL.
+  response.set({ "Content-Type": "image/webp", "Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" }).send(bytes);
+});
+app.delete("/api/bots/:id/avatar", (request, response) => {
+  const bot = db.getBot(request.params.id);
+  if (!bot) return response.status(404).json({ error: "Teammate not found." });
+  removeAvatar(db.dataDir, bot.id);
+  response.json(db.setBotAvatarVersion(bot.id, null));
+  broadcast();
+});
 app.patch("/api/bots/:id", (request, response) => {
   // Autopilot is only ever switched here, by the owner: never by creating a teammate, a shared link, a routine or a tool call.
   const parsed = botInput.partial().extend({ autopilot: z.boolean().optional() }).safeParse(request.body);
@@ -3934,7 +3970,7 @@ const calendarCreateInput = z.object({
   const duration = Date.parse(value.end) - Date.parse(value.start);
   if (duration <= 0 || duration > 7 * 86_400_000) context.addIssue({ code: "custom", message: "Choose an end after the start, no more than seven days later." });
 });
-const internalToolInput = z.object({ botId: z.string(), runId: z.string(), action: z.enum(["connected_tools", "connected_call", "community_skill_search", "community_skill_read", "memory_search", "conversation_search", "table_summary", "table_reconcile", "spreadsheet_export", "document_export", "web_search", "web_read", "spreadsheet_inspect", "work_collect", "work_report", "queue_propose", "bash", "browser_request_sign_in", "browser_open", "browser_snapshot", "browser_observe", "browser_see", "browser_semantic_act", "browser_semantic_upload", "browser_arm_downloads", "browser_download_results", "browser_click", "browser_type", "browser_upload_saved_file", "mac_list", "mac_read", "mac_organize", "mac_apps_list", "mac_app_inspect", "mac_app_read", "mac_app_open", "mac_app_click", "mac_app_type", "mac_app_key", "mac_app_scroll", "mac_reminders", "mac_reminder_create", "mac_notes_search", "mac_note_read", "mac_note_create", "mac_contacts_find", "mac_calendars", "mac_event_create", "mac_mail_draft", "mac_shortcuts_list", "mac_shortcut_run", "mac_mail_search", "mac_mail_read", "mac_mail_save_attachment", "search_my_mac", "mac_calendar_events", "mac_mail_unread", "code_projects", "code_list", "code_search", "code_read", "code_write", "code_replace", "code_status", "code_diff", "code_branch", "code_commit", "code_request_review", "code_review_result", "code_publish_pr", "code_run", "code_benchmark", "gmail_search", "gmail_read", "gmail_send", "gmail_reply", "google_drive_search", "google_drive_read", "google_drive_create", "google_calendar_agenda", "google_calendar_create", "github_notifications", "github_issues", "github_issue_create", "slack_search", "slack_read", "slack_post", "notion_search", "notion_read", "notion_update", "todoist_tasks", "todoist_task_create", "todoist_task_update", "todoist_task_complete", "dropbox_search", "dropbox_read", "workspace_list", "workspace_read", "workspace_write", "workspace_replace", "task_plan", "task_progress", "task_verify", "routine_create", "routine_list", "routine_update", "routine_pause", "routine_resume", "routine_delete", "remember", "handoff", "message_teammate", "request_approval", "self_extend", "skill_propose"]), args: z.record(z.string(), z.unknown()) });
+const internalToolInput = z.object({ botId: z.string(), runId: z.string(), action: z.enum(["connected_tools", "connected_call", "community_skill_search", "community_skill_read", "memory_search", "conversation_search", "table_summary", "table_reconcile", "spreadsheet_export", "document_export", "video_fetch", "video_render", "web_search", "web_read", "spreadsheet_inspect", "work_collect", "work_report", "queue_propose", "bash", "browser_request_sign_in", "browser_open", "browser_snapshot", "browser_observe", "browser_see", "browser_semantic_act", "browser_semantic_upload", "browser_arm_downloads", "browser_download_results", "browser_click", "browser_type", "browser_upload_saved_file", "mac_list", "mac_read", "mac_organize", "mac_apps_list", "mac_app_inspect", "mac_app_read", "mac_app_open", "mac_app_click", "mac_app_type", "mac_app_key", "mac_app_scroll", "mac_reminders", "mac_reminder_create", "mac_notes_search", "mac_note_read", "mac_note_create", "mac_contacts_find", "mac_calendars", "mac_event_create", "mac_mail_draft", "mac_shortcuts_list", "mac_shortcut_run", "mac_mail_search", "mac_mail_read", "mac_mail_save_attachment", "search_my_mac", "mac_calendar_events", "mac_mail_unread", "code_projects", "code_list", "code_search", "code_read", "code_write", "code_replace", "code_status", "code_diff", "code_branch", "code_commit", "code_request_review", "code_review_result", "code_publish_pr", "code_run", "code_benchmark", "gmail_search", "gmail_read", "gmail_send", "gmail_reply", "google_drive_search", "google_drive_read", "google_drive_create", "google_calendar_agenda", "google_calendar_create", "github_notifications", "github_issues", "github_issue_create", "slack_search", "slack_read", "slack_post", "notion_search", "notion_read", "notion_update", "todoist_tasks", "todoist_task_create", "todoist_task_update", "todoist_task_complete", "dropbox_search", "dropbox_read", "workspace_list", "workspace_read", "workspace_write", "workspace_replace", "task_plan", "task_progress", "task_verify", "routine_create", "routine_list", "routine_update", "routine_pause", "routine_resume", "routine_delete", "remember", "handoff", "message_teammate", "request_approval", "self_extend", "skill_propose"]), args: z.record(z.string(), z.unknown()) });
 app.post("/api/internal/tools", async (request, response) => {
   const parsed = internalToolInput.safeParse(request.body);
   if (!parsed.success || !validToolToken(internalToken, parsed.data.botId, parsed.data.runId, request.headers["x-openbot-token"])) return response.status(403).json({ error: "Internal tool access denied." });
@@ -4082,6 +4118,27 @@ app.post("/api/internal/tools", async (request, response) => {
       db.addActivity({ runId, botId, kind: "file", label: "Created your document", detail: `${result.path} · ${result.paragraphs} paragraphs · source kept` });
       broadcast();
       return response.json(result);
+    }
+    if (action === "video_fetch") {
+      if (!bot.browserEnabled) return response.status(403).json({ error: "Web access is off for this teammate. Ask the owner to turn on browser access." });
+      try {
+        const result = await fetchVideo(path.join(db.workspacesDir, botId), args);
+        db.addActivity({ runId, botId, kind: "file", label: result.alreadyDownloaded ? "Used a saved video" : "Saved a video", detail: `${result.title} · ${Math.round(result.seconds / 60)} min${result.transcriptPath ? " · with transcript" : " · no captions"}` });
+        broadcast();
+        return response.json(result);
+      } catch (error) {
+        return response.status(400).json({ error: error instanceof z.ZodError ? "Give one full https YouTube or Vimeo link." : error instanceof Error ? error.message : "The video could not be saved." });
+      }
+    }
+    if (action === "video_render") {
+      try {
+        const result = await renderVideo(path.join(db.workspacesDir, botId), args);
+        db.addActivity({ runId, botId, kind: "file", label: "Made your video", detail: `${result.path} · ${result.seconds}s · ${result.scenes} scenes · ${result.size}` });
+        broadcast();
+        return response.json(result);
+      } catch (error) {
+        return response.status(400).json({ error: error instanceof z.ZodError ? `The video plan is not valid: ${error.issues[0]?.path.join(".") || "request"} ${error.issues[0]?.message || ""}`.trim() : error instanceof Error ? error.message : "The video could not be made." });
+      }
     }
     if (action === "spreadsheet_export") {
       const result = exportSpreadsheet(path.join(db.workspacesDir, botId), args);

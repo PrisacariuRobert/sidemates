@@ -28,6 +28,18 @@ console.log(JSON.stringify({ type: "step_finish", part: { reason: "stop", messag
   assert.equal(probeAllowed(result.testedAt), false, "A just-completed test must be inside its cooldown");
 });
 
+test("connection probe starts OpenCode in its own folder and passes no --dir (removed in OpenCode 2.x)", async () => {
+  let seen: { args: string[]; cwd: string } | null = null;
+  const script = `console.log(JSON.stringify({ type: "text", part: { messageID: "m1", id: "p1" }, text: "${PROBE_TOKEN}" }));`;
+  await probeProviderModel("fixture/model", {}, (_command, args, options) => { seen = { args, cwd: String(options.cwd) }; return spawn(process.execPath, ["--input-type=module", "-e", script], options); });
+  assert.ok(seen, "the probe launched a process");
+  const { args, cwd } = seen as { args: string[]; cwd: string };
+  assert.equal(args.includes("--dir"), false);
+  assert.deepEqual(args.slice(0, 5), ["run", "--format", "json", "--model", "fixture/model"]);
+  assert.ok(args.every((arg) => arg !== "--standalone") || args.includes("--standalone"), "standalone only appears when OpenCode supports it");
+  assert.ok(path.basename(cwd).startsWith("openbot-provider-probe-"), cwd);
+});
+
 test("connection probe fails closed on a runtime error without leaking it", async () => {
   const script = `console.error("request failed: ECONNREFUSED 127.0.0.1:1"); process.exit(1);`;
   const result = await probeProviderModel("fixture/model", {}, (command, args, options) => spawn(process.execPath, ["--input-type=module", "-e", script], options));

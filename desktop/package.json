@@ -30,6 +30,7 @@
       "main.mjs",
       "navigation.mjs",
       "studio-identity.mjs",
+      "build/icon.png",
       "package.json"
     ],
     "extraResources": [

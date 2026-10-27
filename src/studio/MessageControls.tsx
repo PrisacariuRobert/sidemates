@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Copy, MessageCircleReply, Pencil, RotateCcw, Share, SmilePlus, X } from "lucide-react";
+import { Check, Copy, MessageCircleReply, MessagesSquare, Pencil, RotateCcw, Share, SmilePlus, X } from "lucide-react";
 import { ReadAloudButton } from "../components/Dictation";
 
 /** Per-message contextual actions (U02c): reply, copy and the five
@@ -10,11 +10,13 @@ import { ReadAloudButton } from "../components/Dictation";
 export const MESSAGE_EMOJIS = ["👍", "❤️", "✅", "👀", "🎉"] as const;
 export type MessageEmoji = (typeof MESSAGE_EMOJIS)[number];
 
-export function MessageControls({ messageId, reactions, onReply, onReacted, readAloud, onRetry, onEdit, onShare }: {
+export function MessageControls({ messageId, reactions, onReply, onReacted, readAloud, onRetry, onEdit, onShare, onThread }: {
   messageId: string;
   /** Ask the same teammate again (latest reply only). */
   onRetry?: () => void;
   onShare?: () => void;
+  /** Open a side thread about this message. */
+  onThread?: () => void;
   /** Put your latest message back in the box to adjust and resend. */
   onEdit?: () => void;
   /** A teammate reply that can be read aloud. */
@@ -55,6 +57,11 @@ export function MessageControls({ messageId, reactions, onReply, onReacted, read
       <button type="button" className="message-control" aria-label="Reply to this message" title="Reply" onClick={onReply}>
         <MessageCircleReply size={15} />
       </button>
+      {onThread && (
+        <button type="button" className="message-control" aria-label="Reply in a thread" title="Reply in thread" onClick={onThread}>
+          <MessagesSquare size={15} />
+        </button>
+      )}
       <button type="button" className="message-control" aria-label={copied ? "Copied" : "Copy message text"} title={copied ? "Copied" : "Copy"} onClick={() => void copy()}>
         {copied ? <Check size={15} /> : <Copy size={15} />}
       </button>

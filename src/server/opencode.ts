@@ -18,6 +18,7 @@ import { prepareConsultationFiles } from "./consultation-files.js";
 import { routeBotReply } from "./group-routing.js";
 import { decideTaskOutcome } from "./task-outcome.js";
 import { friendlyModelName, modelBelongsToConnection } from "../shared/provider-config.js";
+import { standaloneArgs } from "./opencode-flags.js";
 import { aiRest, classifyJob, isLimitError, rankAi, type AiConnection } from "./ai-router.js";
 import { toolAvailability } from "./tool-availability.js";
 import { CommunitySkills } from "./community-skills.js";
@@ -29,6 +30,7 @@ import { ExecutionMeter, executionLimits, executionStopMessage, WEEKLY_BUDGET_ST
 import { opencodeCompatibility, runtimeMayExecute, RUNTIME_INCOMPATIBLE_MESSAGE, type RuntimeCompatibility } from "./runtime-compatibility.js";
 import { ModelOutput } from "./model-output.js";
 import { LiveText } from "./live-text.js";
+import { TOOL_PREFIX } from "./teammate-permissions.js";
 import { conversationBridge, MAX_REUSED_CONTEXT, reportedContextSize } from "./conversation-context.js";
 export { eventText, appendModelText } from "./model-output.js";
 
@@ -63,7 +65,7 @@ function eventSessionId(event: Record<string, unknown>): string | null {
 type ToolActivity = { label: string; detail: string | null; kind: "tool" | "handoff" };
 
 function friendlyToolActivity(rawName: string, title: string | null): ToolActivity {
-  const name = rawName.replace(/^mcp__openbot__/, "");
+  const name = rawName.replace(/^mcp__openbot__/, "").replace(new RegExp(`^${TOOL_PREFIX}`), "");
   return { label: TOOL_STEP_LABELS[name] || title || "Working on it", detail: null, kind: name === "handoff" ? "handoff" : "tool" };
 }
 
@@ -443,6 +445,9 @@ export class OpenCodeRunner {
         ? `Continue the existing task after the user's latest instruction or approval. Current request: ${run.prompt}`
         : `Take care of this new request for the user: ${run.prompt}\nOlder tasks are background only, not part of this request. Do not repeat their actions or append unrelated completion claims.`;
     request = `${currentMoment()}\n\n${request}`;
+    // A reply inside a side thread: give the teammate the message it is about.
+    const sideRootMessage = run.sideRootId ? this.options.db.getMessage(run.sideRootId) : null;
+    if (sideRootMessage) request += `\n\nThis request is a reply in a side thread about an earlier message from ${sideRootMessage.senderName}: “${sideRootMessage.body.replace(/\s+/g, " ").slice(0, 1500)}”. Answer about that message and keep the reply short and focused on it.`;
     const sharedProjects = this.options.db.listCodeProjects(bot.id).map((project) => {
       const access = project.access.find((item) => item.botId === bot.id)!;
       return `- ${project.name} (${project.id}): ${access.canWrite ? "edit" : "read-only"}${access.canRun ? ", checks enabled" : ""}`;
@@ -547,7 +552,9 @@ export class OpenCodeRunner {
       if (!runtimeMayExecute(compatibility.compatibility)) {
         const reason = compatibility.compatibility === "unknown"
           ? "Sidemates could not check the installed OpenCode version. The check may have timed out or the runtime may be unavailable. No model was started. Try again; if this repeats, check the runtime installation."
-          : `${RUNTIME_INCOMPATIBLE_MESSAGE} Detected: ${compatibility.detectedVersion} (${compatibility.compatibility}).`;
+          : compatibility.detail
+            ? `OpenCode ${compatibility.detectedVersion} is not supported yet, so teammate execution is paused. Sidemates checked it automatically and found: ${compatibility.detail} Update Sidemates or use a supported runtime.`
+            : `${RUNTIME_INCOMPATIBLE_MESSAGE} Detected: ${compatibility.detectedVersion} (${compatibility.compatibility}).`;
         this.failBeforeStart(run, reason, "Runtime not verified");
         return;
       }
@@ -573,7 +580,7 @@ export class OpenCodeRunner {
     const prompt = this.buildPrompt(run, bot, sessionChoice.continuing) + (!previousSession ? conversationBridge(this.options.db, run) : "") + sharedFiles;
     const attachedFiles = modelAttachmentFiles(this.options.db, run);
     const mcpConfig = JSON.stringify({ mcpServers: { openbot: { command: process.execPath, args: [CLAUDE_MCP_PATH] } } });
-    const claudeTools = ["mcp__openbot__connected_tools", "mcp__openbot__connected_call", "mcp__openbot__community_skill_search", "mcp__openbot__community_skill_read", "mcp__openbot__memory_search", "mcp__openbot__conversation_search", "mcp__openbot__table_summary", "mcp__openbot__table_reconcile", "mcp__openbot__spreadsheet_export", "mcp__openbot__document_export", "mcp__openbot__web_search", "mcp__openbot__web_read", "mcp__openbot__spreadsheet_inspect", "mcp__openbot__workspace_list", "mcp__openbot__workspace_read", "mcp__openbot__workspace_write", "mcp__openbot__workspace_replace", "mcp__openbot__isolated_bash", "mcp__openbot__browser_request_sign_in", "mcp__openbot__browser_open", "mcp__openbot__browser_snapshot", "mcp__openbot__browser_observe", "mcp__openbot__browser_see", "mcp__openbot__browser_semantic_act", "mcp__openbot__browser_semantic_upload", "mcp__openbot__browser_arm_downloads", "mcp__openbot__browser_download_results", "mcp__openbot__browser_click", "mcp__openbot__browser_type", "mcp__openbot__browser_upload_saved_file", "mcp__openbot__mac_list", "mcp__openbot__mac_read", "mcp__openbot__mac_organize", "mcp__openbot__mac_apps_list", "mcp__openbot__mac_app_inspect", "mcp__openbot__mac_app_read", "mcp__openbot__mac_app_open", "mcp__openbot__mac_app_click", "mcp__openbot__mac_app_type", "mcp__openbot__mac_app_key", "mcp__openbot__mac_app_scroll", "mcp__openbot__mac_calendar_events", "mcp__openbot__mac_mail_unread", "mcp__openbot__search_my_mac", "mcp__openbot__mac_mail_search", "mcp__openbot__mac_mail_read", "mcp__openbot__mac_mail_save_attachment", "mcp__openbot__mac_reminders", "mcp__openbot__mac_reminder_create", "mcp__openbot__mac_notes_search", "mcp__openbot__mac_note_read", "mcp__openbot__mac_note_create", "mcp__openbot__mac_contacts_find", "mcp__openbot__mac_calendars", "mcp__openbot__mac_event_create", "mcp__openbot__mac_mail_draft", "mcp__openbot__queue_propose", "mcp__openbot__mac_shortcuts_list", "mcp__openbot__mac_shortcut_run", "mcp__openbot__code_projects", "mcp__openbot__code_list", "mcp__openbot__code_search", "mcp__openbot__code_read", "mcp__openbot__code_write", "mcp__openbot__code_replace", "mcp__openbot__code_status", "mcp__openbot__code_diff", "mcp__openbot__code_branch", "mcp__openbot__code_commit", "mcp__openbot__code_request_review", "mcp__openbot__code_review_result", "mcp__openbot__code_publish_pr", "mcp__openbot__code_run", "mcp__openbot__gmail_search", "mcp__openbot__gmail_read", "mcp__openbot__gmail_send", "mcp__openbot__gmail_reply", "mcp__openbot__google_drive_search", "mcp__openbot__google_drive_read", "mcp__openbot__google_drive_create", "mcp__openbot__google_calendar_agenda", "mcp__openbot__google_calendar_create", "mcp__openbot__github_notifications", "mcp__openbot__github_issues", "mcp__openbot__github_issue_create", "mcp__openbot__slack_search", "mcp__openbot__slack_read", "mcp__openbot__slack_post", "mcp__openbot__notion_search", "mcp__openbot__notion_read", "mcp__openbot__notion_update", "mcp__openbot__todoist_tasks", "mcp__openbot__todoist_task_create", "mcp__openbot__todoist_task_update", "mcp__openbot__todoist_task_complete", "mcp__openbot__dropbox_search", "mcp__openbot__dropbox_read", "mcp__openbot__task_plan", "mcp__openbot__task_progress", "mcp__openbot__task_verify", "mcp__openbot__skill_propose", "mcp__openbot__routine_create", "mcp__openbot__routine_list", "mcp__openbot__routine_update", "mcp__openbot__routine_pause", "mcp__openbot__routine_resume", "mcp__openbot__routine_delete", "mcp__openbot__remember", "mcp__openbot__handoff", "mcp__openbot__message_teammate", "mcp__openbot__request_approval", "mcp__openbot__self_extend"].join(",");
+    const claudeTools = ["mcp__openbot__connected_tools", "mcp__openbot__connected_call", "mcp__openbot__community_skill_search", "mcp__openbot__community_skill_read", "mcp__openbot__memory_search", "mcp__openbot__conversation_search", "mcp__openbot__table_summary", "mcp__openbot__table_reconcile", "mcp__openbot__spreadsheet_export", "mcp__openbot__document_export", "mcp__openbot__video_fetch", "mcp__openbot__video_render", "mcp__openbot__web_search", "mcp__openbot__web_read", "mcp__openbot__spreadsheet_inspect", "mcp__openbot__workspace_list", "mcp__openbot__workspace_read", "mcp__openbot__workspace_write", "mcp__openbot__workspace_replace", "mcp__openbot__isolated_bash", "mcp__openbot__browser_request_sign_in", "mcp__openbot__browser_open", "mcp__openbot__browser_snapshot", "mcp__openbot__browser_observe", "mcp__openbot__browser_see", "mcp__openbot__browser_semantic_act", "mcp__openbot__browser_semantic_upload", "mcp__openbot__browser_arm_downloads", "mcp__openbot__browser_download_results", "mcp__openbot__browser_click", "mcp__openbot__browser_type", "mcp__openbot__browser_upload_saved_file", "mcp__openbot__mac_list", "mcp__openbot__mac_read", "mcp__openbot__mac_organize", "mcp__openbot__mac_apps_list", "mcp__openbot__mac_app_inspect", "mcp__openbot__mac_app_read", "mcp__openbot__mac_app_open", "mcp__openbot__mac_app_click", "mcp__openbot__mac_app_type", "mcp__openbot__mac_app_key", "mcp__openbot__mac_app_scroll", "mcp__openbot__mac_calendar_events", "mcp__openbot__mac_mail_unread", "mcp__openbot__search_my_mac", "mcp__openbot__mac_mail_search", "mcp__openbot__mac_mail_read", "mcp__openbot__mac_mail_save_attachment", "mcp__openbot__mac_reminders", "mcp__openbot__mac_reminder_create", "mcp__openbot__mac_notes_search", "mcp__openbot__mac_note_read", "mcp__openbot__mac_note_create", "mcp__openbot__mac_contacts_find", "mcp__openbot__mac_calendars", "mcp__openbot__mac_event_create", "mcp__openbot__mac_mail_draft", "mcp__openbot__queue_propose", "mcp__openbot__mac_shortcuts_list", "mcp__openbot__mac_shortcut_run", "mcp__openbot__code_projects", "mcp__openbot__code_list", "mcp__openbot__code_search", "mcp__openbot__code_read", "mcp__openbot__code_write", "mcp__openbot__code_replace", "mcp__openbot__code_status", "mcp__openbot__code_diff", "mcp__openbot__code_branch", "mcp__openbot__code_commit", "mcp__openbot__code_request_review", "mcp__openbot__code_review_result", "mcp__openbot__code_publish_pr", "mcp__openbot__code_run", "mcp__openbot__gmail_search", "mcp__openbot__gmail_read", "mcp__openbot__gmail_send", "mcp__openbot__gmail_reply", "mcp__openbot__google_drive_search", "mcp__openbot__google_drive_read", "mcp__openbot__google_drive_create", "mcp__openbot__google_calendar_agenda", "mcp__openbot__google_calendar_create", "mcp__openbot__github_notifications", "mcp__openbot__github_issues", "mcp__openbot__github_issue_create", "mcp__openbot__slack_search", "mcp__openbot__slack_read", "mcp__openbot__slack_post", "mcp__openbot__notion_search", "mcp__openbot__notion_read", "mcp__openbot__notion_update", "mcp__openbot__todoist_tasks", "mcp__openbot__todoist_task_create", "mcp__openbot__todoist_task_update", "mcp__openbot__todoist_task_complete", "mcp__openbot__dropbox_search", "mcp__openbot__dropbox_read", "mcp__openbot__task_plan", "mcp__openbot__task_progress", "mcp__openbot__task_verify", "mcp__openbot__skill_propose", "mcp__openbot__routine_create", "mcp__openbot__routine_list", "mcp__openbot__routine_update", "mcp__openbot__routine_pause", "mcp__openbot__routine_resume", "mcp__openbot__routine_delete", "mcp__openbot__remember", "mcp__openbot__handoff", "mcp__openbot__message_teammate", "mcp__openbot__request_approval", "mcp__openbot__self_extend"].join(",");
     // The teammate's own identity replaces Claude Code's coding-assistant
     // instructions (a "software engineering" agent in a terminal, with memory
     // tools teammates don't have): the same prompt OpenCode teammates get,
@@ -585,7 +592,8 @@ export class OpenCodeRunner {
     // option, so without it a trailing prompt is read as a tool name and the run stops with no input.
     const args = useClaude
       ? ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model.replace(/^claude-code\//, ""), "--permission-mode", "dontAsk", "--tools", "", "--system-prompt", teammateSystemPrompt(bot), "--setting-sources", "project,local", "--mcp-config", mcpConfig, "--strict-mcp-config", "--allowedTools", `${claudeTools},mcp__openbot__work_collect,mcp__openbot__work_report,mcp__openbot__code_benchmark`, ...(previousSession ? ["--resume", previousSession] : []), "--", prompt]
-      : ["run", "--auto", "--format", "json", "--model", model, "--dir", workspace, "--agent", run.expectedWorkKind ? "openbot-report" : "openbot", ...attachedFiles.flatMap((file) => ["--file", file]), ...(previousSession ? ["--session", previousSession] : []), "--title", `${bot.name} · Sidemates`, prompt];
+      // No --dir: OpenCode 2.x removed it. The process starts in the teammate's workspace (cwd below), which is its project.
+      : ["run", "--auto", "--format", "json", "--model", model, ...standaloneArgs(), "--agent", run.expectedWorkKind ? "openbot-report" : "openbot", ...attachedFiles.flatMap((file) => ["--file", file]), ...(previousSession ? ["--session", previousSession] : []), "--title", `${bot.name} · Sidemates`, prompt];
     const runEnvironment = safeHostEnvironment(extraEnvironment);
     const liveOpenCode = !useClaude && liveOpenCodeAvailable(runEnvironment.PATH, Boolean(this.options.spawnProcess));
     const child = (this.options.spawnProcess || spawn)(useClaude ? "claude" : liveOpenCode ? process.execPath : "opencode", liveOpenCode ? [OPENCODE_LIVE_PATH, ...args] : args, { cwd: workspace, env: runEnvironment, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
@@ -710,6 +718,9 @@ export class OpenCodeRunner {
       if (!line.trim() || stoppedFor) return;
       try {
         const event = JSON.parse(line) as Record<string, unknown>;
+        // OpenCode 2.x calls Sidemates' tools openbot_<name>; everything downstream knows the plain name.
+        const toolPart = event.part as Record<string, unknown> | undefined;
+        if (typeof toolPart?.tool === "string" && toolPart.tool.startsWith(TOOL_PREFIX)) toolPart.tool = toolPart.tool.slice(TOOL_PREFIX.length);
         if (!event || typeof event !== "object" || Array.isArray(event)) return;
         if (event.type === "openbot.opencode_event" || event.type === "stream_event") {
           if (event.type === "stream_event") live.addClaude(event as Parameters<LiveText["addClaude"]>[0]);

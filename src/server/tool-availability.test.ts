@@ -36,7 +36,7 @@ test("standard reports expose only source collection and saved results", () => {
     assert.equal(flags.table_summary, false);
     const workspace = prepareWorkspace(db, db.getBot("nova")!, true);
     const configuration = JSON.parse(readFileSync(path.join(workspace, "opencode.json"), "utf8"));
-    assert.deepEqual(configuration.agent["openbot-report"].permission, { "*": "deny", work_collect: "allow", work_report: "allow" });
+    assert.deepEqual(configuration.agent["openbot-report"].permission, { "*": "deny", work_collect: "allow", openbot_work_collect: "allow", work_report: "allow", openbot_work_report: "allow" });
     assert.equal(configuration.tools, undefined);
   } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
 });

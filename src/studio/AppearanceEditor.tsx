@@ -45,6 +45,27 @@ export function AppearanceEditor({
       setBusy(false);
     }
   }
+  const avatarUrl = bot.avatarVersion ? `/api/bots/${encodeURIComponent(bot.id)}/avatar?v=${bot.avatarVersion}` : null;
+  async function sendPicture(request: () => Promise<Response>) {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await request();
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Couldn’t change the picture. Try again.");
+      onSaved(result);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  function uploadPicture(file: File | undefined) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return setError("Choose a picture (JPG, PNG, WebP or GIF).");
+    if (file.size > 6 * 1024 * 1024) return setError("That picture is larger than 6 MB. Choose a smaller one.");
+    void sendPicture(() => fetch(`/api/bots/${encodeURIComponent(bot.id)}/avatar`, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file }));
+  }
   // Picks save themselves after a beat — no Save button to hunt for.
   function pick(nextShape: MascotKind, nextColor: string) {
     setShape(nextShape);
@@ -66,8 +87,25 @@ export function AppearanceEditor({
           color={color}
           size={96}
           mood="happy"
+          avatar={avatarUrl}
         />
         <p>Still {bot.name}. A little more you.</p>
+      </div>
+      <div className="avatar-actions">
+        <label className={`avatar-upload${busy ? " disabled" : ""}`}>
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            disabled={busy}
+            onChange={(event) => { uploadPicture(event.target.files?.[0]); event.target.value = ""; }}
+          />
+          {avatarUrl ? "Change picture" : "Use your own picture"}
+        </label>
+        {avatarUrl && (
+          <button type="button" className="avatar-remove" disabled={busy} onClick={() => void sendPicture(() => fetch(`/api/bots/${encodeURIComponent(bot.id)}/avatar`, { method: "DELETE" }))}>
+            Use the mascot again
+          </button>
+        )}
       </div>
       <AppearancePicker
         name={bot.name}

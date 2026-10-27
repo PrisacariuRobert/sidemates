@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { ModelOutput } from "./model-output.js";
 import { safeHostEnvironment } from "./runtime.js";
+import { standaloneArgs } from "./opencode-flags.js";
 
 export const PROBE_TOKEN = "OPENBOT_OK";
 export const PROBE_TIMEOUT_MS = 90_000;
@@ -48,7 +49,8 @@ export async function probeProviderModel(model: string, extraEnv: Record<string,
   };
   let child: ChildProcess;
   try {
-    child = spawnProcess("opencode", ["run", "--format", "json", "--model", model, "--dir", workspace, `Reply with the exact text ${PROBE_TOKEN} on its own line. Do not call any tools.`],
+    // No --dir: OpenCode 2.x dropped it. The process starts in the throwaway folder (cwd), which it uses as its project.
+    child = spawnProcess("opencode", ["run", "--format", "json", "--model", model, ...standaloneArgs(), `Reply with the exact text ${PROBE_TOKEN} on its own line. Do not call any tools.`],
       { cwd: workspace, stdio: ["ignore", "pipe", "pipe"], env: safeHostEnvironment({ ...extraEnv, OPENCODE_DISABLE_SHARE: "true" }) });
   } catch {
     return finish(false, safeProbeError("runtime not installed"));
