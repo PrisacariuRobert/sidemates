@@ -274,3 +274,11 @@
 .connection-onramp:has(.ai-recommended) { padding: 0; border: 0; background: none; }
 .connection-onramp:has(.ai-recommended) .connection-onramp-actions { gap: 16px; margin: 2px 0 0; }
 .connection-onramp:has(.ai-recommended) .connection-onramp-actions :is(a, button) { min-height: 36px; padding: 6px 0; border: 0; background: none; color: var(--label-primary); font-size: 13px; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--separator-strong); }
+
+/* Own picture for a teammate (next to the look editor so it is styled wherever the editor is). */
+.avatar-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 14px; }
+.avatar-upload, .avatar-remove { position: relative; display: inline-flex; align-items: center; padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.avatar-upload:hover, .avatar-remove:hover:not(:disabled) { background: var(--surface-muted); }
+.avatar-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.avatar-upload:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.avatar-upload.disabled, .avatar-remove:disabled { opacity: .55; pointer-events: none; }
