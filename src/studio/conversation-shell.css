@@ -2683,10 +2683,11 @@ mark.mention { background: none; color: inherit; font-weight: 600; padding: 0; }
 .context-work strong { font-size: 13px; line-height: 1.4; }
 .context-state { display: inline-flex; align-items: center; gap: 6px; }
 .context-state i { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
-.context-state.done i { background: #2fb344; }
-.context-state.active i { background: #3b82f6; }
-.context-state.review i { background: #f59e0b; }
-.context-state.failed i { background: #ef4444; }
+/* The studio keeps colour for mascots; state is shown by shape and weight, and always has a word beside it. */
+.context-state.done i { background: var(--ink); }
+.context-state.active i { background: color-mix(in srgb, var(--ink) 45%, transparent); }
+.context-state.review i { background: transparent; box-shadow: inset 0 0 0 2px var(--ink); }
+.context-state.failed i { background: var(--ink); border-radius: 2px; }
 
 /* A teammate's own picture, drawn wherever their mascot would be. */
 .character.character-avatar { display: inline-block; flex: none; border-radius: 50%; overflow: hidden; background: var(--surface-muted); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent); animation: none; }

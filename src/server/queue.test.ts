@@ -167,13 +167,15 @@ test("when undo fails the card stays done so it can be tried again", async () =>
 });
 
 test("undo is offered for seven days, then the person is told to change it in the app", async () => {
-  let now = new Date("2026-10-05T09:00:00Z");
+  // The approval is stamped with the real time, so the fake clock must start from it.
+  const start = Date.now();
+  let now = new Date(start);
   const { queue, done } = setup({ now: () => now });
   try {
     const proposed = queue.propose(reminder("mail:50"), { botId: null, runId: null });
     if (!proposed.ok) throw new Error("setup");
     await queue.approve(proposed.item.id);
-    now = new Date("2026-10-20T09:00:00Z");
+    now = new Date(start + 15 * 86_400_000);
     await assert.rejects(queue.undo(proposed.item.id), (error: unknown) => error instanceof QueueError && error.code === "too_old");
   } finally { done(); }
 });
