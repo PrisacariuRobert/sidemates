@@ -19,7 +19,9 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
+import { realpathSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
+import { connectTools } from "./opencode-v2-tools.mjs";
 
 const argv = process.argv.slice(2);
 const children = new Set();
@@ -236,6 +238,9 @@ function liveFromV2(event) {
   return null;
 }
 
+// Steps the run's own output already reported usage for, and every step the event stream says ended.
+const reportedSteps = new Set(), endedSteps = new Map();
+
 async function watchV2(signal) {
   try {
     const response = await fetch(`${base}/api/event`, { headers: { ...auth, accept: "text/event-stream" }, signal });
@@ -252,6 +257,7 @@ async function watchV2(signal) {
         try {
           const event = JSON.parse(line.slice(5).trim());
           if (!sessionId && event?.data?.sessionID && ["session.created", "session.execution.started"].includes(event.type)) sessionId = event.data.sessionID;
+          if (event?.type === "session.step.ended" && event.data?.assistantMessageID && (!sessionId || event.data.sessionID === sessionId)) endedSteps.set(event.data.assistantMessageID, event.data);
           const live = liveFromV2(event);
           if (live) write({ type: "openbot.opencode_event", event: live });
         } catch { /* skip an unreadable event */ }
@@ -260,7 +266,13 @@ async function watchV2(signal) {
   } catch { /* the stream ended or was stopped */ }
 }
 
-async function runV2(password) {
+async function runV2(password, directory, agentName) {
+  try { await connectTools(api, directory, { agent: agentName, stopped: () => exiting }); }
+  catch {
+    write({ type: "error", timestamp: Date.now(), sessionID: sessionId, error: { name: "UnknownError", data: { message: "Sidemates' tools could not be started for this OpenCode run." } } });
+    stopAll();
+    return process.exit(1);
+  }
   abortRemote = () => sessionId ? fetch(`${base}/api/session/${sessionId}/interrupt`, { method: "POST", headers: auth, signal: AbortSignal.timeout(1_500) }).catch(() => {}) : Promise.resolve();
   const stream = new AbortController();
   void watchV2(stream.signal);
@@ -275,7 +287,11 @@ async function runV2(password) {
     buffer = lines.pop() || "";
     for (const line of lines) {
       if (!line.trim()) continue;
-      try { const event = JSON.parse(line); if (!sessionId && event?.sessionID) sessionId = event.sessionID; } catch { /* not a result line */ }
+      try {
+        const event = JSON.parse(line);
+        if (!sessionId && event?.sessionID) sessionId = event.sessionID;
+        if (event?.type === "step_finish" && event.part?.messageID) reportedSteps.add(event.part.messageID);
+      } catch { /* not a result line */ }
       write(line);
     }
   });
@@ -284,7 +300,13 @@ async function runV2(password) {
     children.delete(child);
     if (buffer.trim()) write(buffer);
     // Let the last live events and the server shut down cleanly.
-    setTimeout(() => { stream.abort(); stopAll(); process.exit(exiting ? 143 : signal ? 1 : code ?? 1); }, 150);
+    setTimeout(() => {
+      stream.abort();
+      // 2.x leaves the closing step out of its own output, so its usage would read as zero.
+      for (const [messageID, step] of endedSteps) if (!reportedSteps.has(messageID)) write({ type: "step_finish", timestamp: Date.now(), sessionID: step.sessionID, part: { id: `${messageID}:finish`, sessionID: step.sessionID, messageID, type: "step-finish", reason: step.finish, cost: step.cost, tokens: step.tokens } });
+      stopAll();
+      process.exit(exiting ? 143 : signal ? 1 : code ?? 1);
+    }, 300);
   });
 }
 
@@ -297,7 +319,7 @@ async function main() {
   base = await startServer(env);
   if (!base || exiting) return plainRun();
   auth.authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
-  if (await isOpenCode2()) return runV2(password);
+  if (await isOpenCode2()) return runV2(password, (() => { try { return realpathSync(options.dir); } catch { return options.dir; } })(), options.agent || "openbot");
   const directory = `?directory=${encodeURIComponent(options.dir)}`;
   abortSession = () => void api(`/session/${sessionId}/abort${directory}`, {}).catch(() => {});
   const stream = new AbortController();

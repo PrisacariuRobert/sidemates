@@ -30,6 +30,7 @@ import { ExecutionMeter, executionLimits, executionStopMessage, WEEKLY_BUDGET_ST
 import { opencodeCompatibility, runtimeMayExecute, RUNTIME_INCOMPATIBLE_MESSAGE, type RuntimeCompatibility } from "./runtime-compatibility.js";
 import { ModelOutput } from "./model-output.js";
 import { LiveText } from "./live-text.js";
+import { TOOL_PREFIX } from "./teammate-permissions.js";
 import { conversationBridge, MAX_REUSED_CONTEXT, reportedContextSize } from "./conversation-context.js";
 export { eventText, appendModelText } from "./model-output.js";
 
@@ -64,7 +65,7 @@ function eventSessionId(event: Record<string, unknown>): string | null {
 type ToolActivity = { label: string; detail: string | null; kind: "tool" | "handoff" };
 
 function friendlyToolActivity(rawName: string, title: string | null): ToolActivity {
-  const name = rawName.replace(/^mcp__openbot__/, "");
+  const name = rawName.replace(/^mcp__openbot__/, "").replace(new RegExp(`^${TOOL_PREFIX}`), "");
   return { label: TOOL_STEP_LABELS[name] || title || "Working on it", detail: null, kind: name === "handoff" ? "handoff" : "tool" };
 }
 
@@ -717,6 +718,9 @@ export class OpenCodeRunner {
       if (!line.trim() || stoppedFor) return;
       try {
         const event = JSON.parse(line) as Record<string, unknown>;
+        // OpenCode 2.x calls Sidemates' tools openbot_<name>; everything downstream knows the plain name.
+        const toolPart = event.part as Record<string, unknown> | undefined;
+        if (typeof toolPart?.tool === "string" && toolPart.tool.startsWith(TOOL_PREFIX)) toolPart.tool = toolPart.tool.slice(TOOL_PREFIX.length);
         if (!event || typeof event !== "object" || Array.isArray(event)) return;
         if (event.type === "openbot.opencode_event" || event.type === "stream_event") {
           if (event.type === "stream_event") live.addClaude(event as Parameters<LiveText["addClaude"]>[0]);

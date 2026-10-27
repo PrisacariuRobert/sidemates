@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { checkOpencodeBoundary, checkOpencodeSafetyRules, decide, inspectBoundary, inspectToolDelivery } from "./runtime-boundary.js";
+import { checkOpencodeBoundary, checkOpencodeSafetyRules, decide, inspectBoundary, usesToolServer } from "./runtime-boundary.js";
 import { AMBIENT_DENIED, teammatePermission } from "./teammate-permissions.js";
 
 const allowed = ["workspace_list", "workspace_read", "workspace_write", "workspace_replace", "task_plan", "web_read", "isolated_bash"];
@@ -49,23 +49,51 @@ test("an action no rule names is not treated as denied, because --auto approves 
 });
 
 test("report-only teammates keep their narrower rules", () => {
-  assert.deepEqual(teammatePermission(allowed, true), { "*": "deny", work_collect: "allow", work_report: "allow" });
+  assert.deepEqual(teammatePermission(allowed, true), { "*": "deny", work_collect: "allow", openbot_work_collect: "allow", work_report: "allow", openbot_work_report: "allow" });
   assert.equal(teammatePermission(allowed)["external_directory"], "deny");
 });
 
-test("a runtime that does not load Sidemates' tool files is reported as not ready, with the reason", () => {
-  const delivery = inspectToolDelivery(modern(good));
-  assert.equal(delivery.ok, false);
-  assert.match(delivery.reasons[0]!, /does not load the tool files.*not finished yet/);
-  assert.deepEqual(inspectToolDelivery(legacy(teammatePermission(allowed))), { ok: true, reasons: [] }, "the older generation loads them");
-  assert.deepEqual(inspectToolDelivery("not json"), { ok: true, reasons: [] }, "unreadable output is the safety check's job");
+test("each tool is allowed by its plain name and its OpenCode 2.x name, never by a wildcard", () => {
+  const rules = teammatePermission(allowed);
+  assert.equal(rules["workspace_read"], "allow");
+  assert.equal(rules["openbot_workspace_read"], "allow");
+  assert.ok(!Object.keys(rules).some((name) => name.includes("*") && name !== "*"), "no pattern rule opens a family of tools");
+  assert.equal(decide(good, "openbot_gmail_send"), "deny", "a tool that is not listed stays denied");
+  const open = inspectBoundary(modern([...good, { action: "openbot_zz_future_runtime_tool", resource: "*", effect: "allow" }]), HELP);
+  assert.equal(open.ok, false);
+  assert.match(open.reasons.join(" "), /not listed would not be denied/);
+  const missing = inspectBoundary(modern(good.filter((rule) => rule.action !== "openbot_workspace_read")), HELP);
+  assert.match(missing.reasons.join(" "), /openbot_workspace_read/);
+});
+
+test("only the newer OpenCode generation gets the tool-reach check", () => {
+  assert.equal(usesToolServer(modern(good)), true);
+  assert.equal(usesToolServer(legacy(teammatePermission(allowed))), false, "the older generation loads tool files");
+  assert.equal(usesToolServer("not json"), false);
+});
+
+test("a newer OpenCode whose tools cannot be reached is reported with the reason; the older one is not probed", () => {
+  const spawnFake = (args: string[]) => ({ status: 0, stdout: args[0] === "debug" ? modern(good) : HELP });
+  const blocked = checkOpencodeBoundary(spawnFake, () => ({ ok: false, reason: "Sidemates' tool server did not connect to this OpenCode." }));
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reasons[0]!, /did not connect/);
+  assert.equal(checkOpencodeBoundary(spawnFake, () => ({ ok: true })).ok, true);
+  let probed = 0;
+  const oldGeneration = (args: string[]) => ({ status: 0, stdout: args[0] === "debug" ? legacy(teammatePermission(allowed)) : HELP });
+  // FIXTURE_ALLOWED matches `allowed`, so the older generation passes without a probe.
+  assert.equal(checkOpencodeBoundary(oldGeneration, () => { probed += 1; return { ok: false }; }).ok, true);
+  assert.equal(probed, 0);
+  // Unsafe rules never reach the tool server.
+  const unsafe = (args: string[]) => ({ status: 0, stdout: args[0] === "debug" ? modern([...good, { action: "bash", resource: "*", effect: "allow" }]) : HELP });
+  assert.equal(checkOpencodeBoundary(unsafe, () => { probed += 1; return { ok: true }; }).ok, false);
+  assert.equal(probed, 0);
 });
 
 const installed = (() => { try { return spawnSync("opencode", ["--version"], { timeout: 10_000 }).status === 0; } catch { return false; } })();
 test("the installed OpenCode, whatever its version, keeps the deny-by-default rules", { skip: !installed, timeout: 60_000 }, () => {
   const result = checkOpencodeSafetyRules();
   assert.equal(result.ok, true, `OpenCode no longer reads Sidemates' safety rules as written: ${result.reasons.join(" | ")}`);
-  // The full verdict is a safety verdict plus tool delivery; it must agree with its parts.
+  // The full verdict adds a real tool-reach check on the newer generation: tools connect and the rules apply to them.
   const full = checkOpencodeBoundary();
-  assert.equal(full.ok, inspectToolDelivery(result.configOutput || "").ok);
+  assert.equal(full.ok, true, `A teammate could not reach its tools: ${full.reasons.join(" | ")}`);
 });

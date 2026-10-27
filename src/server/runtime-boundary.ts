@@ -2,8 +2,9 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { safeHostEnvironment } from "./runtime.js";
-import { AMBIENT_DENIED, teammatePermission } from "./teammate-permissions.js";
+import { AMBIENT_DENIED, TOOL_PREFIX, teammatePermission } from "./teammate-permissions.js";
 
 /** Does the installed OpenCode still read Sidemates' safety rules the way they
  * were written? Pinning one exact version meant every release stopped every
@@ -64,9 +65,10 @@ export function inspectBoundary(configOutput: string, runHelp: string, agentName
   for (const action of [...AMBIENT_DENIED, "external_directory", FUTURE_TOOL]) {
     if (decide(effective, action) !== "deny") reasons.push(action === FUTURE_TOOL ? "Tools OpenCode adds in future would not be denied by default." : `“${action}” is not denied for teammates.`);
   }
-  for (const action of FIXTURE_ALLOWED) {
+  for (const action of [...FIXTURE_ALLOWED, ...FIXTURE_ALLOWED.map((name) => `${TOOL_PREFIX}${name}`)]) {
     if (decide(effective, action) !== "allow") reasons.push(`The Sidemates tool “${action}” is not allowed, so teammates could not work.`);
   }
+  if (decide(effective, `${TOOL_PREFIX}${FUTURE_TOOL}`) !== "deny") reasons.push("Sidemates tools that are not listed would not be denied by default.");
   // Nothing may allow a runtime tool outright, anywhere, in any pattern or order.
   const blanket = effective.filter((rule) => rule.effect === "allow" && (rule.action === "*" || AMBIENT_DENIED.includes(rule.action) || rule.action === "external_directory"));
   for (const rule of blanket) reasons.push(`A rule allows “${rule.action}”${rule.resource === "*" ? "" : ` for ${rule.resource}`}.`);
@@ -76,23 +78,28 @@ export function inspectBoundary(configOutput: string, runHelp: string, agentName
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
-/** Can a teammate actually reach its tools? Sidemates delivers them as tool
- * files in the workspace (.opencode/tools). OpenCode 2.x does not load those:
- * its resolved configuration is a list of sources with plural `agents`, and
- * extra tools only arrive through MCP, behind a code tool, under permission
- * names Sidemates does not write yet. Tested on OpenCode 2.1.4 with two models:
- * both wrote their tool calls out as plain text and no tool ran. Saying such a
- * runtime is ready would let teammates "complete" jobs while doing nothing, so
- * it is reported as not supported yet, with the reason. Remove this when 2.x
- * delivery is built (MCP) and covered by a test that runs a tool. */
-export function inspectToolDelivery(configOutput: string): BoundaryResult {
+/** Can a teammate actually reach its tools? The older generation loads the tool
+ * files Sidemates writes into the workspace. OpenCode 2.x does not: tools reach
+ * it through an MCP server added to the running server (opencode-v2-tools.mjs).
+ * Two models, tested on 2.1.4 before that was built, wrote their tool calls out
+ * as plain text and the job still said "completed", so for that generation this
+ * starts a throwaway server, connects the tools the way a real run does, and
+ * asks its rules what a teammate may call. No model is used. */
+export type DeliveryProbe = (dir: string) => { ok: boolean; reason?: string };
+
+const PROBE_PATH = fileURLToPath(new URL("./opencode-delivery-probe.mjs", import.meta.url));
+const runDeliveryProbe: DeliveryProbe = (dir) => {
+  const result = spawnSync(process.execPath, [PROBE_PATH, dir], { encoding: "utf8", timeout: 70_000, env: safeHostEnvironment() });
+  try { return JSON.parse(String(result.stdout || "").trim().split("\n").pop() || ""); }
+  catch { return { ok: false, reason: "The tool check could not run on this Mac." }; }
+};
+
+/** The older generation prints one merged object; 2.x prints a list of sources with plural `agents`. */
+export function usesToolServer(configOutput: string): boolean {
   let parsed: unknown;
-  try { parsed = JSON.parse(configOutput); } catch { return { ok: true, reasons: [] }; }
+  try { parsed = JSON.parse(configOutput); } catch { return false; }
   const documents = Array.isArray(parsed) ? parsed.map((entry) => (entry as { info?: unknown }).info) : [];
-  const modern = documents.some((doc) => typeof doc === "object" && doc !== null && ("agents" in doc || "permissions" in doc));
-  return modern
-    ? { ok: false, reasons: ["This OpenCode does not load the tool files Sidemates gives teammates, so a teammate would not be able to use its tools. Support for this OpenCode generation is not finished yet."] }
-    : { ok: true, reasons: [] };
+  return documents.some((doc) => typeof doc === "object" && doc !== null && ("agents" in doc || "permissions" in doc));
 }
 
 type Spawn = (args: string[], cwd: string) => { status: number | null; stdout: string };
@@ -101,9 +108,10 @@ const spawnOpenCode: Spawn = (args, cwd) => {
   return { status: result.status, stdout: String(result.stdout || "") };
 };
 
-/** Safety rules and start-up options only; see checkOpencodeBoundary for the full verdict. */
-export function checkOpencodeSafetyRules(spawn: Spawn = spawnOpenCode): BoundaryResult & { configOutput?: string } {
-  const dir = mkdtempSync(path.join(tmpdir(), "sidemates-boundary-"));
+/** Safety rules and start-up options only; see checkOpencodeBoundary for the full verdict.
+ * With `folder`, that folder is used (and kept) instead of a temporary one. */
+export function checkOpencodeSafetyRules(spawn: Spawn = spawnOpenCode, folder?: string): BoundaryResult & { configOutput?: string } {
+  const dir = folder ?? mkdtempSync(path.join(tmpdir(), "sidemates-boundary-"));
   try {
     const permission = teammatePermission(FIXTURE_ALLOWED);
     writeFileSync(path.join(dir, "opencode.json"), JSON.stringify({
@@ -117,14 +125,23 @@ export function checkOpencodeSafetyRules(spawn: Spawn = spawnOpenCode): Boundary
   } catch {
     return { ok: false, reasons: ["The safety check could not run on this Mac."] };
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    if (!folder) rmSync(dir, { recursive: true, force: true });
   }
 }
 
 /** Safe to run teammates on: the rules hold AND the tools can be reached. */
-export function checkOpencodeBoundary(spawn: Spawn = spawnOpenCode): BoundaryResult {
-  const safety = checkOpencodeSafetyRules(spawn);
-  const delivery = safety.configOutput ? inspectToolDelivery(safety.configOutput) : { ok: true, reasons: [] };
-  const reasons = [...safety.reasons, ...delivery.reasons];
-  return { ok: reasons.length === 0, reasons };
+export function checkOpencodeBoundary(spawn: Spawn = spawnOpenCode, probe: DeliveryProbe = runDeliveryProbe): BoundaryResult {
+  const dir = mkdtempSync(path.join(tmpdir(), "sidemates-boundary-"));
+  try {
+    const safety = checkOpencodeSafetyRules(spawn, dir);
+    const reasons = [...safety.reasons];
+    // Only a runtime that is safe is worth connecting tools to.
+    if (safety.ok && safety.configOutput && usesToolServer(safety.configOutput)) {
+      const delivery = probe(dir);
+      if (!delivery.ok) reasons.push(delivery.reason || "A teammate would not be able to use its tools on this OpenCode.");
+    }
+    return { ok: reasons.length === 0, reasons };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
