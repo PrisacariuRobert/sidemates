@@ -29,7 +29,7 @@ export function buildReadinessSteps(input: {
       : input.compatibility === "checked"
         ? `OpenCode ${input.detectedVersion || ""} is ready on this host (a newer version; Sidemates checked its safety rules automatically and they hold).`
       : input.compatibility === "unsupported" && input.compatibilityDetail
-        ? `OpenCode ${input.detectedVersion || "unknown version"} changed how its safety rules work, so teammates are paused. ${input.compatibilityDetail} Update Sidemates or switch runtimes; files, results, settings and receipts remain available.`
+        ? `OpenCode ${input.detectedVersion || "unknown version"} is not supported yet, so teammates are paused. ${input.compatibilityDetail} Update Sidemates or switch runtimes; files, results, settings and receipts remain available.`
       : input.compatibility === "unsupported"
         ? `OpenCode ${input.detectedVersion || "unknown version"} is not verified with this Sidemates release (verified: ${VERIFIED_OPENCODE_VERSION}). Update Sidemates or switch runtimes; files, results, settings and receipts remain available.`
         : "OpenCode did not report a version just now, so execution readiness is unknown. If this persists, reinstall the runtime and try again.";

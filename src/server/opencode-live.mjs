@@ -28,9 +28,11 @@ const auth = { authorization: "" };
 
 const write = (value) => process.stdout.write(`${typeof value === "string" ? value : JSON.stringify(value)}\n`);
 const stopAll = (signal = "SIGTERM") => { for (const child of children) { try { child.kill(signal); } catch { /* gone */ } } };
+// How to ask the server to stop the running session; set once the server's generation is known.
+let abortRemote = () => sessionId && base ? fetch(`${base}/session/${sessionId}/abort`, { method: "POST", headers: auth, signal: AbortSignal.timeout(1_500) }).catch(() => {}) : Promise.resolve();
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, () => {
   exiting = true;
-  const abort = sessionId && base ? fetch(`${base}/session/${sessionId}/abort`, { method: "POST", headers: auth, signal: AbortSignal.timeout(1_500) }).catch(() => {}) : Promise.resolve();
+  const abort = abortRemote();
   void abort.finally(() => { stopAll(signal); process.exit(143); });
   setTimeout(() => { stopAll("SIGKILL"); process.exit(143); }, 3_000).unref();
 });
@@ -209,14 +211,93 @@ function fallBack(stream) {
   plainRun();
 }
 
+/** OpenCode 2.x: a different server API (under /api, new event names, the
+ * password in OPENCODE_PASSWORD). `opencode run --server` still does the work and
+ * prints the usual result lines, so those are passed through untouched. The only
+ * thing added here is live text: the event stream's text updates are turned into
+ * the display-only lines Sidemates already shows. */
+async function isOpenCode2() {
+  try {
+    const response = await fetch(`${base}/api/info`, { headers: auth, signal: AbortSignal.timeout(4_000) });
+    if (!response.ok || !/json/i.test(response.headers.get("content-type") || "")) return false;
+    return typeof (await response.json())?.version === "string";
+  } catch { return false; }
+}
+
+/** Event stream (2.x names) -> the shape the live-text collector reads. */
+function liveFromV2(event) {
+  const data = event?.data || {};
+  const message = data.assistantMessageID;
+  if (!message || (data.sessionID && sessionId && data.sessionID !== sessionId)) return null;
+  const partID = `${message}:text:${data.ordinal ?? 0}`;
+  if (event.type === "session.text.started") return { type: "message.part.updated", properties: { part: { id: partID, messageID: message, type: "text", text: "" } } };
+  if (event.type === "session.text.delta" && typeof data.delta === "string") return { type: "message.part.delta", properties: { partID, messageID: message, field: "text", delta: data.delta } };
+  if (event.type === "session.text.ended" && typeof data.text === "string") return { type: "message.part.updated", properties: { part: { id: partID, messageID: message, type: "text", text: data.text } } };
+  return null;
+}
+
+async function watchV2(signal) {
+  try {
+    const response = await fetch(`${base}/api/event`, { headers: { ...auth, accept: "text/event-stream" }, signal });
+    // Live text is a bonus. If the stream is not a real one, the run goes on without it.
+    if (!response.ok || !response.body || !/text\/event-stream/i.test(response.headers.get("content-type") || "")) return;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        try {
+          const event = JSON.parse(line.slice(5).trim());
+          if (!sessionId && event?.data?.sessionID && ["session.created", "session.execution.started"].includes(event.type)) sessionId = event.data.sessionID;
+          const live = liveFromV2(event);
+          if (live) write({ type: "openbot.opencode_event", event: live });
+        } catch { /* skip an unreadable event */ }
+      }
+    }
+  } catch { /* the stream ended or was stopped */ }
+}
+
+async function runV2(password) {
+  abortRemote = () => sessionId ? fetch(`${base}/api/session/${sessionId}/interrupt`, { method: "POST", headers: auth, signal: AbortSignal.timeout(1_500) }).catch(() => {}) : Promise.resolve();
+  const stream = new AbortController();
+  void watchV2(stream.signal);
+  // The same arguments the plain run would get, pointed at this private server.
+  const args = ["run", "--server", base, ...argv.slice(1).filter((arg) => arg !== "--standalone")];
+  const child = spawn("opencode", args, { env: { ...process.env, OPENCODE_PASSWORD: password }, stdio: ["ignore", "pipe", "inherit"] });
+  children.add(child);
+  let buffer = "";
+  child.stdout.on("data", (chunk) => {
+    buffer += String(chunk);
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try { const event = JSON.parse(line); if (!sessionId && event?.sessionID) sessionId = event.sessionID; } catch { /* not a result line */ }
+      write(line);
+    }
+  });
+  child.on("error", (error) => { process.stderr.write(`${error.message}\n`); stream.abort(); stopAll(); process.exit(1); });
+  child.on("close", (code, signal) => {
+    children.delete(child);
+    if (buffer.trim()) write(buffer);
+    // Let the last live events and the server shut down cleanly.
+    setTimeout(() => { stream.abort(); stopAll(); process.exit(exiting ? 143 : signal ? 1 : code ?? 1); }, 150);
+  });
+}
+
 async function main() {
   const options = parse(argv);
   if (!options) return plainRun();
   const password = randomUUID();
-  const env = { ...process.env, OPENCODE_SERVER_PASSWORD: password };
+  // 1.x reads OPENCODE_SERVER_PASSWORD; 2.x reads OPENCODE_PASSWORD (and prefers it).
+  const env = { ...process.env, OPENCODE_SERVER_PASSWORD: password, OPENCODE_PASSWORD: password };
   base = await startServer(env);
   if (!base || exiting) return plainRun();
   auth.authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+  if (await isOpenCode2()) return runV2(password);
   const directory = `?directory=${encodeURIComponent(options.dir)}`;
   abortSession = () => void api(`/session/${sessionId}/abort${directory}`, {}).catch(() => {});
   const stream = new AbortController();

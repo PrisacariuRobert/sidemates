@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { checkOpencodeBoundary, decide, inspectBoundary } from "./runtime-boundary.js";
+import { checkOpencodeBoundary, checkOpencodeSafetyRules, decide, inspectBoundary, inspectToolDelivery } from "./runtime-boundary.js";
 import { AMBIENT_DENIED, teammatePermission } from "./teammate-permissions.js";
 
 const allowed = ["workspace_list", "workspace_read", "workspace_write", "workspace_replace", "task_plan", "web_read", "isolated_bash"];
@@ -53,8 +53,19 @@ test("report-only teammates keep their narrower rules", () => {
   assert.equal(teammatePermission(allowed)["external_directory"], "deny");
 });
 
+test("a runtime that does not load Sidemates' tool files is reported as not ready, with the reason", () => {
+  const delivery = inspectToolDelivery(modern(good));
+  assert.equal(delivery.ok, false);
+  assert.match(delivery.reasons[0]!, /does not load the tool files.*not finished yet/);
+  assert.deepEqual(inspectToolDelivery(legacy(teammatePermission(allowed))), { ok: true, reasons: [] }, "the older generation loads them");
+  assert.deepEqual(inspectToolDelivery("not json"), { ok: true, reasons: [] }, "unreadable output is the safety check's job");
+});
+
 const installed = (() => { try { return spawnSync("opencode", ["--version"], { timeout: 10_000 }).status === 0; } catch { return false; } })();
 test("the installed OpenCode, whatever its version, keeps the deny-by-default rules", { skip: !installed, timeout: 60_000 }, () => {
-  const result = checkOpencodeBoundary();
+  const result = checkOpencodeSafetyRules();
   assert.equal(result.ok, true, `OpenCode no longer reads Sidemates' safety rules as written: ${result.reasons.join(" | ")}`);
+  // The full verdict is a safety verdict plus tool delivery; it must agree with its parts.
+  const full = checkOpencodeBoundary();
+  assert.equal(full.ok, inspectToolDelivery(result.configOutput || "").ok);
 });

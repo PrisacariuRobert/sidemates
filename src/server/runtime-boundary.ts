@@ -76,13 +76,33 @@ export function inspectBoundary(configOutput: string, runHelp: string, agentName
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
+/** Can a teammate actually reach its tools? Sidemates delivers them as tool
+ * files in the workspace (.opencode/tools). OpenCode 2.x does not load those:
+ * its resolved configuration is a list of sources with plural `agents`, and
+ * extra tools only arrive through MCP, behind a code tool, under permission
+ * names Sidemates does not write yet. Tested on OpenCode 2.1.4 with two models:
+ * both wrote their tool calls out as plain text and no tool ran. Saying such a
+ * runtime is ready would let teammates "complete" jobs while doing nothing, so
+ * it is reported as not supported yet, with the reason. Remove this when 2.x
+ * delivery is built (MCP) and covered by a test that runs a tool. */
+export function inspectToolDelivery(configOutput: string): BoundaryResult {
+  let parsed: unknown;
+  try { parsed = JSON.parse(configOutput); } catch { return { ok: true, reasons: [] }; }
+  const documents = Array.isArray(parsed) ? parsed.map((entry) => (entry as { info?: unknown }).info) : [];
+  const modern = documents.some((doc) => typeof doc === "object" && doc !== null && ("agents" in doc || "permissions" in doc));
+  return modern
+    ? { ok: false, reasons: ["This OpenCode does not load the tool files Sidemates gives teammates, so a teammate would not be able to use its tools. Support for this OpenCode generation is not finished yet."] }
+    : { ok: true, reasons: [] };
+}
+
 type Spawn = (args: string[], cwd: string) => { status: number | null; stdout: string };
 const spawnOpenCode: Spawn = (args, cwd) => {
   const result = spawnSync("opencode", args, { cwd, encoding: "utf8", timeout: 30_000, env: safeHostEnvironment() });
   return { status: result.status, stdout: String(result.stdout || "") };
 };
 
-export function checkOpencodeBoundary(spawn: Spawn = spawnOpenCode): BoundaryResult {
+/** Safety rules and start-up options only; see checkOpencodeBoundary for the full verdict. */
+export function checkOpencodeSafetyRules(spawn: Spawn = spawnOpenCode): BoundaryResult & { configOutput?: string } {
   const dir = mkdtempSync(path.join(tmpdir(), "sidemates-boundary-"));
   try {
     const permission = teammatePermission(FIXTURE_ALLOWED);
@@ -93,10 +113,18 @@ export function checkOpencodeBoundary(spawn: Spawn = spawnOpenCode): BoundaryRes
     const config = spawn(["debug", "config"], dir);
     if (config.status !== 0) return { ok: false, reasons: ["OpenCode could not report its configuration, so its safety rules cannot be confirmed."] };
     const help = spawn(["run", "--help"], dir);
-    return inspectBoundary(config.stdout, help.stdout);
+    return { ...inspectBoundary(config.stdout, help.stdout), configOutput: config.stdout };
   } catch {
     return { ok: false, reasons: ["The safety check could not run on this Mac."] };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** Safe to run teammates on: the rules hold AND the tools can be reached. */
+export function checkOpencodeBoundary(spawn: Spawn = spawnOpenCode): BoundaryResult {
+  const safety = checkOpencodeSafetyRules(spawn);
+  const delivery = safety.configOutput ? inspectToolDelivery(safety.configOutput) : { ok: true, reasons: [] };
+  const reasons = [...safety.reasons, ...delivery.reasons];
+  return { ok: reasons.length === 0, reasons };
 }

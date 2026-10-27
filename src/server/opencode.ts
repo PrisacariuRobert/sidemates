@@ -552,7 +552,7 @@ export class OpenCodeRunner {
         const reason = compatibility.compatibility === "unknown"
           ? "Sidemates could not check the installed OpenCode version. The check may have timed out or the runtime may be unavailable. No model was started. Try again; if this repeats, check the runtime installation."
           : compatibility.detail
-            ? `OpenCode ${compatibility.detectedVersion} changed how its safety rules work, so teammate execution is paused. Sidemates checked them automatically and found: ${compatibility.detail} Update Sidemates or use a supported runtime.`
+            ? `OpenCode ${compatibility.detectedVersion} is not supported yet, so teammate execution is paused. Sidemates checked it automatically and found: ${compatibility.detail} Update Sidemates or use a supported runtime.`
             : `${RUNTIME_INCOMPATIBLE_MESSAGE} Detected: ${compatibility.detectedVersion} (${compatibility.compatibility}).`;
         this.failBeforeStart(run, reason, "Runtime not verified");
         return;

@@ -78,7 +78,7 @@ test("readiness steps tell saved apart from runnable", () => {
   assert.match(checked[0]!.detail, /checked its safety rules automatically/);
   const refused = buildReadinessSteps({ ...base, compatibility: "unsupported", detectedVersion: "2.9.0", compatibilityDetail: "“bash” is not denied for teammates." });
   assert.equal(refused[0]!.ready, false);
-  assert.match(refused[0]!.detail, /safety rules.*bash/);
+  assert.match(refused[0]!.detail, /not supported yet.*bash/);
   const patched = buildReadinessSteps({ ...base, compatibility: "compatible", detectedVersion: "1.18.32" });
   assert.equal(patched[0]!.ready, true, "a newer verified-line patch can run");
   assert.match(patched[0]!.detail, /1\.18\.32 is ready.*newer patch/);
