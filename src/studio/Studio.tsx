@@ -1918,9 +1918,10 @@ export function Studio() {
             <span className="group-stack" aria-hidden="true">
               <Face bot={members[0]!} size={30} />
               <Face bot={members[1]!} size={30} />
+              {members.length > 2 && <i className="group-more">+{members.length - 2}</i>}
             </span>
           ) : bot ? (
-            <Face bot={bot} size={43} />
+            <Face bot={bot} size={sidebarCollapsed ? 38 : 43} />
           ) : (
             <span className="room-mark">
               {isGroupThread(item) ? (
@@ -2077,7 +2078,16 @@ export function Studio() {
         >
           {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
         </button>
-        <label className="conversation-search">
+        <label
+          className="conversation-search"
+          title={sidebarCollapsed ? "Find a conversation" : undefined}
+          onClick={() => {
+            // In the rail the search box is hidden: tapping it opens the sidebar with the cursor ready.
+            if (!sidebarCollapsed) return;
+            toggleSidebar();
+            window.setTimeout(() => document.querySelector<HTMLInputElement>(".sidebar .conversation-search input")?.focus(), 230);
+          }}
+        >
           <Search size={16} />
           <input
             aria-label="Find a conversation"
