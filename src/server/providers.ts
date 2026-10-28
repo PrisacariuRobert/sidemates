@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { claudeHealth, claudeHealthMessage } from "./claude-health.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import type { ProviderCatalogEntry, ProviderInstance, ProviderLoginAttempt, ProviderStatus } from "../shared/types.js";
@@ -182,6 +183,7 @@ async function inspectProviderStatus(db: OpenBotDatabase, loginAttempts: Provide
     openCodeInstalled ? check("opencode", ["models"]) : Promise.resolve({ code: 1, stdout: "", stderr: "" }),
     claudeInstalled ? check("claude", ["auth", "status"]) : Promise.resolve({ code: 1, stdout: "", stderr: "" }),
   ]);
+  const claudeHelp = claudeInstalled ? await check("claude", ["--help"]) : { code: 1, stdout: "", stderr: "" };
   let allModels = modelLines(models.stdout);
   const signedIn = auth.code === 0 ? openCodeSignIns(auth.stdout) : null;
   const openCodeConnected = Boolean(signedIn?.opencode);
@@ -190,6 +192,8 @@ async function inspectProviderStatus(db: OpenBotDatabase, loginAttempts: Provide
   const gitlabConnected = Boolean(signedIn?.gitlab);
   const xaiConnected = Boolean(signedIn?.xai);
   const googleConnected = Boolean(signedIn?.google);
+  const claudeVersionText = `${claudeVersion.stdout}`.trim().split(/\s+/)[0] || "";
+  const claudeProblem = claudeInstalled && claudeVersionText ? claudeHealth(claudeVersionText, () => claudeHelp.stdout) : null;
   let claudeConnected = false;
   try { claudeConnected = Boolean(JSON.parse(claudeAuth.stdout || "{}").loggedIn); } catch { claudeConnected = /logged.?in\D+true/i.test(claudeAuth.stdout); }
 
@@ -219,7 +223,7 @@ async function inspectProviderStatus(db: OpenBotDatabase, loginAttempts: Provide
 
   const catalog: ProviderCatalogEntry[] = [
     { id: "opencode", name: "OpenCode", shortName: "OpenCode", description: "OpenCode Go models through your OpenCode account.", badge: "OpenCode Go", connected: openCodeConnected, installed: openCodeInstalled, canConnect: false, connectionId: openCodeConnected ? "local-opencode" : null, models: modelsFor("opencode", allModels), note: openCodeConnected ? modelsFor("opencode", allModels).length ? "Sign-in found on this Mac; model access is checked when a task runs." : OPENCODE_NO_MODELS_NOTE : openCodeInstalled ? "Connect from OpenCode once, then come back here." : "Install OpenCode first." },
-    { id: "claude", name: "Claude", shortName: "Claude", description: "Uses the Claude Code you installed and signed in to, with your Pro, Max, Team, Enterprise or Console plan.", badge: "Claude Code", connected: claudeConnected, installed: claudeInstalled, canConnect: claudeInstalled, connectionId: claudeConnected ? "local-claude" : null, models: modelsFor("claude", allModels), note: claudeConnected ? "Signed in through Claude Code" : claudeInstalled ? "Sign in without sharing a password with Sidemates." : "Install Claude Code first." },
+    { id: "claude", name: "Claude", shortName: "Claude", description: "Uses the Claude Code you installed and signed in to, with your Pro, Max, Team, Enterprise or Console plan.", badge: "Claude Code", connected: claudeConnected, installed: claudeInstalled, canConnect: claudeInstalled, connectionId: claudeConnected ? "local-claude" : null, models: modelsFor("claude", allModels), note: claudeProblem && !claudeProblem.ok ? claudeHealthMessage(claudeProblem) : claudeConnected ? "Signed in through Claude Code" : claudeInstalled ? "Sign in without sharing a password with Sidemates." : "Install Claude Code first." },
     { id: "openai", name: "ChatGPT / OpenAI", shortName: "ChatGPT", description: "Use ChatGPT Plus/Pro OAuth or your existing OpenAI connection.", badge: "Subscription", connected: openAIConnected, installed: openCodeInstalled, canConnect: openCodeInstalled, connectionId: openAIConnected ? "local-openai" : null, models: modelsFor("openai", allModels), note: openAIConnected ? "Sign-in found through OpenCode; model access is checked when a task runs." : "Browser sign-in through OpenCode." },
     { id: "github-copilot", name: "GitHub Copilot", shortName: "Copilot", description: "Use the models included with Copilot Pro, Pro+ or Business. Copilot Free and Student plans can't be used by apps right now.", badge: "Subscription", connected: copilotConnected, installed: openCodeInstalled, canConnect: openCodeInstalled, connectionId: copilotConnected ? "local-github-copilot" : null, models: modelsFor("github-copilot", allModels), note: copilotConnected ? (modelsFor("github-copilot", allModels).length ? "Sign-in found through OpenCode; model access is checked when a task runs." : "Signed in, but this Copilot plan doesn't offer models to apps (Free and Student plans). Use Gemini's free key or another account.") : "Connect a GitHub.com account." },
     { id: "gitlab", name: "GitLab Duo", shortName: "GitLab", description: "Connect a GitLab Duo seat for agent work.", badge: "Experimental", connected: gitlabConnected, installed: openCodeInstalled, canConnect: openCodeInstalled, connectionId: gitlabConnected ? "local-gitlab" : null, models: modelsFor("gitlab", allModels), note: gitlabConnected ? "Sign-in found through OpenCode; model access is checked when a task runs." : "GitLab support in OpenCode is experimental." },

@@ -1,4 +1,6 @@
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { claudeHealth, claudeHealthMessage, readClaudeHelp, type ClaudeHealth } from "./claude-health.js";
+import { looksLikeUnrunToolCall, UNRUN_TOOL_CALL_ERROR } from "./unrun-tool-call.js";
 import { accessSync, constants, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -152,12 +154,20 @@ export interface OpenCodeRunnerOptions {
   limits?: ExecutionLimits;
   // Gate 1a: injectable so tests and non-OpenCode runtimes are explicit.
   runtimeCheck?: () => RuntimeCompatibility;
+  /** The automatic Claude Code check; tests that fake the process skip it. */
+  claudeCheck?: () => ClaudeHealth | null;
   // Allows real-process fault fixtures without invoking a model account.
   spawnProcess?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   /** The owner's connected AIs, for teammates set to automatic. */
   aiConnections?: () => AiConnection[];
   /** Apple's built-in AI; replaceable in tests. */
   appleRespond?: (input: { instructions: string; prompt: string }) => Promise<string>;
+}
+
+function defaultClaudeCheck(): ClaudeHealth | null {
+  const result = spawnSync("claude", ["--version"], { encoding: "utf8", timeout: 10_000, env: safeHostEnvironment() });
+  const version = `${result.stdout || ""}`.trim().split(/\s+/)[0];
+  return version ? claudeHealth(version, () => readClaudeHelp(safeHostEnvironment())) : null;
 }
 
 export class OpenCodeRunner {
@@ -547,7 +557,10 @@ export class OpenCodeRunner {
     const sharedFiles = prepareConsultationFiles(this.options.db, run);
     const useClaude = provider?.runtime === "claude_code";
     // Gate 1a: an unverified runtime fails closed for model execution only.
-    if (!useClaude) {
+    if (useClaude) {
+      const health = (this.options.claudeCheck || (this.options.spawnProcess ? () => null : defaultClaudeCheck))();
+      if (health && !health.ok) { this.failBeforeStart(run, claudeHealthMessage(health), "Claude Code not checked"); return; }
+    } else {
       const compatibility = (this.options.runtimeCheck || opencodeCompatibility)();
       if (!runtimeMayExecute(compatibility.compatibility)) {
         const reason = compatibility.compatibility === "unknown"
@@ -838,6 +851,14 @@ export class OpenCodeRunner {
         if (!this.enforceJobBudget(run.id) && this.options.db.retryIntermediateTurn(run.id)) {
           this.options.db.addActivity({ runId: run.id, botId: bot.id, kind: "status", label: "Continuing the unfinished step", detail: "The model stopped after a completed read or planning step. One continuation uses the same task, saved context and remaining allowance." });
         }
+      } else if (code === 0 && output.finalText && looksLikeUnrunToolCall(output.finalText)) {
+        this.options.db.updateRun(run.id, { ...finalUsage, status: "failed", finishedAt, error: UNRUN_TOOL_CALL_ERROR, partialText: responseText });
+        this.options.db.finishRunTask(run.id, "failed", UNRUN_TOOL_CALL_ERROR);
+        this.options.db.addActivity({ runId: run.id, botId: bot.id, kind: "error", label: "Nothing was actually done", detail: UNRUN_TOOL_CALL_ERROR });
+        this.shareChildOutcome(run, bot, UNRUN_TOOL_CALL_ERROR, true);
+        this.options.onChange();
+        void this.tick();
+        return;
       } else if (code === 0 && output.finalText) {
         const reports = this.options.db.listWorkSnapshots(run.id).filter((snapshot) => this.options.db.getWorkReport(snapshot.id));
         if (current?.expectedWorkKind && !reports.some((snapshot) => snapshot.kind === current.expectedWorkKind)) {

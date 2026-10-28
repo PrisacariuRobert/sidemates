@@ -652,3 +652,18 @@ test("at the step limit a task gets one tool-free turn to answer, then stops hon
     assert.ok(second.modelSteps <= stepsAtStop + 6 + 30, `bounded wrap-up (shutdown grace included) (${stepsAtStop} → ${second.modelSteps} steps)`);
   } finally { await f.close(); }
 });
+
+test("a tool call written out as text fails the job instead of reading as done", async () => {
+  const events = [
+    { type: "text", part: { id: "part-one", messageID: "one", type: "text", text: "All done! <｜DSML｜tool_calls><｜DSML｜invoke name=\"openbot_workspace_write\">notes.txt</｜DSML｜invoke></｜DSML｜tool_calls>" } },
+  ];
+  const f = fixture(events.map(event => `console.log(${JSON.stringify(JSON.stringify(event))});`).join("\n"));
+  try {
+    const run = await f.start();
+    assert.equal(run.status, "failed");
+    assert.match(run.error || "", /wrote out a tool call instead of using it/);
+    assertNoFalseFinishedAnswer(f.db, run);
+  } finally {
+    await f.close();
+  }
+});
