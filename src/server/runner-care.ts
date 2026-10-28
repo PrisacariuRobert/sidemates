@@ -88,13 +88,18 @@ function updateRecord(dataDir: string): UpdateRecord | null {
   }
 }
 
-function storageCheck(dataDir: string): RunnerCareCheck {
+type DiskReader = (dataDir: string) => { total: number; free: number };
+
+const readDisk: DiskReader = (dataDir) => {
+  const stats = statfsSync(dataDir, { bigint: true });
+  return { total: Number(stats.blocks * stats.bsize), free: Number(stats.bavail * stats.bsize) };
+};
+
+function storageCheck(dataDir: string, disk: DiskReader = readDisk): RunnerCareCheck {
   const synced = syncedFolderProvider(dataDir);
   if (synced) return { id: "storage", label: "Storage", status: "attention", value: `In ${synced}`, detail: "Move the data folder out of the synced folder; syncing a live database can corrupt it" };
   try {
-    const stats = statfsSync(dataDir, { bigint: true });
-    const total = Number(stats.blocks * stats.bsize);
-    const free = Number(stats.bavail * stats.bsize);
+    const { total, free } = disk(dataDir);
     const healthy = free >= 5 * 1_024 ** 3 && (total === 0 || free / total >= 0.1);
     return {
       id: "storage",
@@ -152,6 +157,7 @@ export async function inspectRunnerCare(input: {
   chromePath?: string;
   run?: CommandRunner;
   now?: number;
+  disk?: DiskReader;
 }): Promise<RunnerCareSnapshot> {
   const run = input.run || execute;
   const packageJson = JSON.parse(readFileSync(path.join(input.rootDir, "package.json"), "utf8")) as { version?: string };
@@ -162,7 +168,7 @@ export async function inspectRunnerCare(input: {
   ]);
   const version = packageJson.version || "unknown";
   const checks: RunnerCareCheck[] = [
-    storageCheck(input.dataDir),
+    storageCheck(input.dataDir, input.disk),
     backupCheck(input.dataDir, input.now ?? Date.now()),
     softwareCheck(input.dataDir, version),
     toolCheck("opencode", "OpenCode", openCode, "Model runtime is available", "Reconnect or reinstall OpenCode on this host"),

@@ -26,7 +26,7 @@ test("teammates on Automatic get an AI as soon as one is connected", { timeout: 
   const base = `http://127.0.0.1:${address.port}`;
   const child = spawn(process.execPath, ["--import", "tsx", "src/server/index.ts"], {
     cwd: path.resolve(import.meta.dirname, "../.."),
-    env: { ...process.env, HOME: root, PATH: `${bin}:/usr/bin:/bin`, OPENBOT_LOAD_ENV: "0", OPENBOT_DATA_DIR: path.join(root, "data"), OPENBOT_PORT: String(address.port), OPENBOT_APP_URL: base, OPENBOT_HOST: "127.0.0.1", OPENBOT_DEPLOYMENT_MODE: "local", NODE_ENV: "production" },
+    env: { ...process.env, HOME: root, PATH: `${bin}:/usr/bin:/bin`, OPENBOT_LOAD_ENV: "0", OPENBOT_APPLE_AI: "off", OPENBOT_DATA_DIR: path.join(root, "data"), OPENBOT_PORT: String(address.port), OPENBOT_APP_URL: base, OPENBOT_HOST: "127.0.0.1", OPENBOT_DEPLOYMENT_MODE: "local", NODE_ENV: "production" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const exited = once(child, "exit"); let log = "";

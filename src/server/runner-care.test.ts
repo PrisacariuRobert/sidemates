@@ -37,6 +37,7 @@ test("reports real private-runner tools and a recent backup", async () => {
       dataDir,
       rootDir: root,
       now: Date.parse("2026-09-04T18:00:00.000Z"),
+      disk: () => ({ total: 500 * 1_024 ** 3, free: 200 * 1_024 ** 3 }),
       run: async (command) => ({ ok: true, output: command === "docker" ? "28.0.4" : "1.2.3" }),
     });
     assert.equal(result.version, "0.26.0");

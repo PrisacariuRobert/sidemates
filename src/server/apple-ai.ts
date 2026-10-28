@@ -24,6 +24,7 @@ const runHelper: Runner = (helper, input, timeoutMs) => new Promise((resolve, re
 /** The helper, wherever this copy of Sidemates keeps it: built into the
  * Mac app's bin folder (on PATH), or the checkout's own bin folder. */
 export function appleAiHelper(env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = existsSync): string | null {
+  if (env.OPENBOT_APPLE_AI === "off") return null;
   if (env.OPENBOT_APPLE_AI && exists(env.OPENBOT_APPLE_AI)) return env.OPENBOT_APPLE_AI;
   for (const dir of [path.join(rootDir, "bin"), ...(env.PATH || "").split(path.delimiter).filter(Boolean)]) {
     const candidate = path.join(dir, "apple-ai");
